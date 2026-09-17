@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="620" viewBox="0 0 680 620" role="img" aria-labelledby="title desc">
+  <title id="title">一次请求：文字进入模型，逐 token 生成，再还原文字</title>
+  <desc id="desc">聊天模板和分词器准备输入。模型 forward 产生词表分数，argmax 选一个 token；未结束就把新 token 送回模型，结束后解码新增编号。</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#495057" stroke-width="1.5"/></marker></defs>
+  <style>
+    text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#212529;font-size:16px;letter-spacing:0}
+    .title{font-size:22px;font-weight:600}.small{font-size:14px;fill:#495057}.sky{fill:#1864ab}.mint{fill:#087f5b}
+    .edge{fill:none;stroke:#495057;stroke-width:1.5;marker-end:url(#arrow)}
+  </style>
+  <rect width="680" height="620" rx="8" fill="#fff"/>
+  <text class="title" x="40" y="40">一次请求，其实是在反复续写</text>
+  <text class="small" x="40" y="66">蓝色：准备输入与显示结果　绿色：模型生成循环</text>
+  <rect x="180" y="90" width="320" height="60" rx="6" fill="#e7f5ff" stroke="#339af0"/>
+  <text class="sky" x="340" y="114" text-anchor="middle">用户消息 + 聊天模板</text>
+  <text class="small" x="340" y="137" text-anchor="middle">“1加1等于几？”加上角色与边界标记</text>
+  <path class="edge" d="M340 150V180"/>
+  <rect x="180" y="180" width="320" height="60" rx="6" fill="#e7f5ff" stroke="#339af0"/>
+  <text class="sky" x="340" y="204" text-anchor="middle">Tokenizer：文字变编号</text>
+  <text class="small" x="340" y="227" text-anchor="middle">本例得到 18 个输入 token</text>
+  <path class="edge" d="M340 240V280"/>
+  <rect x="180" y="280" width="320" height="60" rx="6" fill="#e6fcf5" stroke="#20c997"/>
+  <text class="mint" x="340" y="304" text-anchor="middle">forward：计算下一 token 的分数</text>
+  <text class="small" x="340" y="327" text-anchor="middle">首轮读 18 个；有缓存后每轮只读 1 个</text>
+  <path class="edge" d="M340 340V380"/>
+  <rect x="180" y="380" width="320" height="60" rx="6" fill="#e6fcf5" stroke="#20c997"/>
+  <text class="mint" x="340" y="404" text-anchor="middle">argmax：选一个编号，追加到序列</text>
+  <text class="small" x="340" y="427" text-anchor="middle">例如先选“1”，下一轮再选“加”</text>
+  <path class="edge" d="M500 410H625V310H500"/>
+  <text class="small" x="562" y="355" text-anchor="middle">未结束</text>
+  <text class="small" x="562" y="376" text-anchor="middle">送入新 token</text>
+  <path class="edge" d="M340 440V515"/>
+  <text class="small" x="350" y="483">遇到 EOS 或达到长度上限</text>
+  <rect x="180" y="515" width="320" height="60" rx="6" fill="#e7f5ff" stroke="#339af0"/>
+  <text class="sky" x="340" y="539" text-anchor="middle">切掉 prompt，再 decode 成文字</text>
+  <text class="small" x="340" y="562" text-anchor="middle">注意：这里的 decode 只是编号转文字</text>
+</svg>

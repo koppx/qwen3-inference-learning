@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="510" viewBox="0 0 680 510" role="img" aria-labelledby="title desc">
+  <title id="title">RoPE：根据 token 位置旋转 Q 与 K 的成对维度</title>
+  <desc id="desc">两个坐标系展示同一二维向量在不同位置采用不同旋转角度。图中60度只用于说明几何关系，并非真实模型计算值。K在旋转后写入缓存，V不旋转。</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#495057" stroke-width="1.5"/></marker></defs>
+  <style>
+    text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#212529;font-size:16px;letter-spacing:0}
+    .title{font-size:22px;font-weight:600}.small{font-size:14px;fill:#495057}.sky{fill:#1864ab}.mint{fill:#087f5b}
+    .axis{fill:none;stroke:#adb5bd;stroke-width:1.5;marker-end:url(#arrow)}
+  </style>
+  <rect width="680" height="510" rx="8" fill="#fff"/>
+  <text class="title" x="40" y="40">RoPE：给“出现位置”一个几何表达</text>
+  <text class="small" x="40" y="66">只画一对维度；实际会按不同频率旋转多对维度</text>
+  <text class="sky" x="170" y="110" text-anchor="middle">位置 0：参考角 0°</text>
+  <text class="mint" x="510" y="110" text-anchor="middle">另一位置：示意旋转 60°</text>
+  <path class="axis" d="M80 270V132M65 255H280"/>
+  <path class="axis" d="M420 270V132M405 255H620"/>
+  <path d="M80 255H225" fill="none" stroke="#228be6" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M420 255H565" fill="none" stroke="#adb5bd" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <path d="M420 255L492.5 129.4" fill="none" stroke="#0ca678" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M463 255A43 43 0 0 0 441.5 217.8" fill="none" stroke="#0ca678" stroke-width="1.5"/>
+  <text class="small" x="113" y="226">原始向量</text>
+  <text class="small" x="507" y="179">旋转后</text>
+  <text class="small" x="462" y="227">60°</text>
+  <text class="small" x="170" y="308" text-anchor="middle">向量长度不变</text>
+  <text class="small" x="510" y="308" text-anchor="middle">方向随位置而变</text>
+  <path d="M40 333H640" stroke="#dee2e6"/>
+  <text x="40" y="365">代码中的位置：Q/K Norm 之后，缓存更新之前</text>
+  <rect x="40" y="389" width="280" height="65" rx="6" fill="#e7f5ff" stroke="#339af0"/>
+  <text class="sky" x="180" y="415" text-anchor="middle">旋转后的 Q</text>
+  <text class="small" x="180" y="438" text-anchor="middle">用于本轮查询，不存进 KV Cache</text>
+  <rect x="360" y="389" width="280" height="65" rx="6" fill="#e6fcf5" stroke="#20c997"/>
+  <text class="mint" x="500" y="415" text-anchor="middle">旋转后的 K</text>
+  <text class="small" x="500" y="438" text-anchor="middle">写入缓存，后续轮次直接复用</text>
+  <text class="small" x="40" y="486">V 不做 RoPE；已经缓存的 K 不会在每轮按新位置重新旋转。</text>
+</svg>

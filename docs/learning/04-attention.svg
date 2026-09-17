@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="710" viewBox="0 0 680 710" role="img" aria-labelledby="title desc">
+  <title id="title">Attention：匹配上下文，按权重汇总内容</title>
+  <desc id="desc">当前Q和完整K做内积得到分数，经过因果mask及softmax得到权重，再用权重汇总完整V，最后合并头并投影回1024维。</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#495057" stroke-width="1.5"/></marker></defs>
+  <style>
+    text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#212529;font-size:16px;letter-spacing:0}
+    .title{font-size:22px;font-weight:600}.small{font-size:14px;fill:#495057}.edge{fill:none;stroke:#495057;stroke-width:1.5;marker-end:url(#arrow)}
+    .sky{fill:#1864ab}.mint{fill:#087f5b}
+  </style>
+  <rect width="680" height="710" rx="8" fill="#fff"/>
+  <text class="title" x="40" y="40">Attention：先找相关性，再汇总内容</text>
+  <text class="small" x="40" y="66">S：本轮输入长度　T：包含本轮位置在内的全部可见 K/V 长度</text>
+  <rect x="40" y="100" width="260" height="90" rx="6" fill="#e7f5ff" stroke="#339af0"/>
+  <text class="sky" x="170" y="128" text-anchor="middle">本轮 Q：发起查询</text>
+  <text class="small" x="170" y="151" text-anchor="middle">已完成 Q Norm 与 RoPE</text>
+  <text class="small" x="170" y="175" text-anchor="middle">[B, 16, S, 128]</text>
+  <rect x="380" y="100" width="260" height="90" rx="6" fill="#e6fcf5" stroke="#20c997"/>
+  <text class="mint" x="510" y="128" text-anchor="middle">完整 K/V：旧缓存 + 本轮新增</text>
+  <text class="small" x="510" y="151" text-anchor="middle">缓存存 8 头，计算时共享给 16 头</text>
+  <text class="small" x="510" y="175" text-anchor="middle">计算视图 [B, 16, T, 128]</text>
+  <path class="edge" d="M170 190V220H270V250"/>
+  <path class="edge" d="M510 190V220H410V250"/>
+  <text class="small" x="458" y="215">K</text>
+  <rect x="180" y="250" width="320" height="65" rx="6" fill="#e7f5ff" stroke="#339af0"/>
+  <text class="sky" x="340" y="276" text-anchor="middle">1. Q 与每个 K 匹配、缩放</text>
+  <text class="small" x="340" y="300" text-anchor="middle">分数矩阵 [B, 16, S, T]</text>
+  <path class="edge" d="M340 315V365"/>
+  <rect x="180" y="365" width="320" height="65" rx="6" fill="#e7f5ff" stroke="#339af0"/>
+  <text class="sky" x="340" y="391" text-anchor="middle">2. mask 遮挡 + softmax 归一化</text>
+  <text class="small" x="340" y="415" text-anchor="middle">对每个 Q，各可读位置的权重总和为 1</text>
+  <path class="edge" d="M340 430V480"/>
+  <path class="edge" d="M640 145H658V513H500"/>
+  <text class="mint" x="566" y="455" text-anchor="middle">完整 V</text>
+  <text class="small" x="566" y="478" text-anchor="middle">提供内容</text>
+  <rect x="180" y="480" width="320" height="65" rx="6" fill="#e6fcf5" stroke="#20c997"/>
+  <text class="mint" x="340" y="506" text-anchor="middle">3. 按权重汇总 V</text>
+  <text class="small" x="340" y="530" text-anchor="middle">每个头得到 [B, 16, S, 128] 中的一份</text>
+  <path class="edge" d="M340 545V590"/>
+  <rect x="180" y="590" width="320" height="65" rx="6" fill="#e7f5ff" stroke="#339af0"/>
+  <text class="sky" x="340" y="616" text-anchor="middle">4. 合并 16 头，再做 O 投影</text>
+  <text class="small" x="340" y="640" text-anchor="middle">[B, S, 2048] 变为 [B, S, 1024]</text>
+  <text class="small" x="40" y="688">第一次 Decode：S = 1，T = 19；输入很短，仍会读取全部历史 K/V。</text>
+</svg>

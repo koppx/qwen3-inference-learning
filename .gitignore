@@ -1,0 +1,13 @@
+.venv/
+.cache/
+outputs/
+__pycache__/
+.pytest_cache/
+
+# 本机文件、密钥和环境配置
+.DS_Store
+.env
+.env.*
+!.env.example
+*.pem
+*.key

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="620" viewBox="0 0 680 620" role="img" aria-labelledby="title desc">
+  <title id="title">因果掩码：当前位置不能读取未来</title>
+  <desc id="desc">五个位置的教学矩阵中，下三角含对角线可读，上三角不可读。本例第一次 Decode 位于位置18，可以读取位置0至18。</desc>
+  <style>
+    text{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#212529;font-size:16px;letter-spacing:0}
+    .title{font-size:22px;font-weight:600}.small{font-size:14px;fill:#495057}.cell{font-size:14px;fill:#087f5b}.muted{fill:#868e96}
+  </style>
+  <rect width="680" height="620" rx="8" fill="#fff"/>
+  <text class="title" x="40" y="40">因果掩码：只能看自己和前面</text>
+  <text class="small" x="40" y="66">上图用 5 个位置说明规则；绿色可读，灰色不可读</text>
+  <text x="320" y="108" text-anchor="middle">被读取的 K 位置</text>
+  <text class="small" x="52" y="205">发起读取</text>
+  <text class="small" x="52" y="228">的 Q 位置</text>
+  <g text-anchor="middle">
+    <text x="208" y="135">0</text><text x="264" y="135">1</text><text x="320" y="135">2</text><text x="376" y="135">3</text><text x="432" y="135">4</text>
+    <text x="155" y="179">0</text><text x="155" y="235">1</text><text x="155" y="291">2</text><text x="155" y="347">3</text><text x="155" y="403">4</text>
+  </g>
+  <rect x="180" y="145" width="280" height="280" fill="#e9ecef"/>
+  <path d="M180 145H236V201H292V257H348V313H404V369H460V425H180Z" fill="#c3fae8"/>
+  <path d="M236 145V425M292 145V425M348 145V425M404 145V425M180 201H460M180 257H460M180 313H460M180 369H460" stroke="#fff" stroke-width="4"/>
+  <g class="cell" text-anchor="middle">
+    <text class="cell" x="208" y="179">可读</text>
+    <text class="cell" x="208" y="235">可读</text><text class="cell" x="264" y="235">可读</text>
+    <text class="cell" x="208" y="291">可读</text><text class="cell" x="264" y="291">可读</text><text class="cell" x="320" y="291">可读</text>
+    <text class="cell" x="208" y="347">可读</text><text class="cell" x="264" y="347">可读</text><text class="cell" x="320" y="347">可读</text><text class="cell" x="376" y="347">可读</text>
+    <text class="cell" x="208" y="403">可读</text><text class="cell" x="264" y="403">可读</text><text class="cell" x="320" y="403">可读</text><text class="cell" x="376" y="403">可读</text><text class="cell" x="432" y="403">可读</text>
+  </g>
+  <text class="small" x="490" y="192">例如 Q 位置 1：</text>
+  <text class="small" x="490" y="220">能读位置 0、1</text>
+  <text class="small" x="490" y="248">不能读 2、3、4</text>
+  <path d="M40 452H640" stroke="#dee2e6"/>
+  <text x="40" y="485">本例第一次 Decode：Q 位于位置 18</text>
+  <rect x="40" y="509" width="455" height="52" rx="4" fill="#c3fae8" stroke="#20c997"/>
+  <rect x="515" y="509" width="125" height="52" rx="4" fill="#e6fcf5" stroke="#20c997"/>
+  <text x="267" y="541" text-anchor="middle">旧 K/V：位置 0 至 17，全部可读</text>
+  <text x="577" y="541" text-anchor="middle">本轮位置 18</text>
+  <text class="small" x="40" y="592">本轮位置 18 先写入 K/V，所以注意力能读取总共 19 个位置。</text>
+</svg>
