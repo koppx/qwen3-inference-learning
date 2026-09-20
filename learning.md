@@ -13,6 +13,8 @@ Python 中的用户请求
   -> token ID 解码成最终文字
 ```
 
+全文始终围绕同一个具体请求：用户输入 `1加1等于几？`，prompt 最终被编码为 18 个 token，最多生成 16 个新 token。后文出现的形状、长度和 token ID，默认都指这个请求。
+
 目标不是让你在一堆源码链接之间跳转，而是把理解这条路径需要的代码和解释放在本文里。链接只是方便你日后打断点。
 
 **阅读导航：**
@@ -32,10 +34,10 @@ Python 中的用户请求
 
 你输入“1加1等于几？”，模型不是一次性返回一篇写好的答案。它反复做的是：
 
-1. 读入目前已经知道的内容，给“下一小段可能是什么”打分。
-2. 选一个分数最高的小段，例如 `1`，接在后面。
-3. 再根据现在的内容，选出下一个小段，例如 `加`。
-4. 一直重复，直到选到结束标记，或者生成额度用完。
+1. 把目前已经知道的内容送进模型，得到“下一个 token 的候选分数”。
+2. 根据生成策略选出一个 token；本例是选分数最大的 token，例如 `1`。
+3. 把这个 token 追加到已有序列末尾，作为下一轮输入的一部分。
+4. 重复上述过程，直到命中结束标记，或者达到生成长度上限。
 
 这里的“小段”叫 **token**。它可能是一个字、一组字、标点，也可能是专门表示消息边界的标记。不要先把它理解成一个完整单词。
 
@@ -43,7 +45,7 @@ Python 中的用户请求
 
 **两个容易混淆的“解码”：** 推理阶段的 Decode 是“再算一轮，生成下一个 token”；`tokenizer.decode()` 是“把已有编号翻译回文字”。它们不是同一件事。
 
-第一遍阅读时，只需要追问三件事：**现在手里是什么数据？这一步改变了什么？交给下一步的又是什么？** 公式和性能细节可以第二遍再看。
+第一遍阅读每一步都可以追问四件事：**输入是什么？这一步做了什么？输出是什么？输出由谁在下一步使用？** 公式和性能细节可以第二遍再看。
 
 ### 0.1 本文对应什么版本
 
@@ -95,13 +97,13 @@ Python 中的用户请求
 
 ## 1. 全局地图：一次请求实际经过哪些函数
 
-**先看白话：** 这条流程分成三种工作：整理文字、反复计算下一个 token、把结果还原成文字。模型加载只发生在前面，不会每生成一个 token 就重新加载一次。
+**先看白话：** 请求可以分成四个阶段：加载模型、把对话整理并编码成 token、反复计算并选择新 token、把新增 token 解码成文字。模型加载只发生在启动阶段，不会每生成一个 token 就重新加载一次。
 
 ![请求生命周期：整理文字、反复生成、还原文字](docs/learning/01-request-flow.svg)
 
 图 1：蓝色是准备工作，绿色是反复生成。第一轮读取整段提示词，后续轮次只补算新 token。图中“选下一个 token”对应 [generation/utils.py:2883-2927][gen-select]，整个入口见 [debug_official.py:53-85][entry-request]。
 
-下面是本例执行主干，省略 PyTorch 的通用包装层：
+下面是本例执行主干，省略 PyTorch 的通用包装层。竖线左侧表示调用关系，`while` 下的内容会反复执行：
 
 ```text
 debug_official.main()
@@ -238,7 +240,9 @@ model = model.to(device)                 # 参数与注册的 buffer 移到目�
 model.eval()                            # 切换模块的 training 标志
 ```
 
-`Auto` 是模型类型分发器，不是一个额外的神经网络。此处 `model_type="qwen3"` 对应 `Qwen3ForCausalLM`；Tokenizer 则加载兼容的 `Qwen2TokenizerFast`。
+这里有两个独立的加载动作：第一段加载 Tokenizer，第二段加载模型。Tokenizer 负责文字和 token ID；模型负责用参数执行神经网络。它们都使用同一个模型目录，但不是同一个对象。
+
+`Auto` 是模型类型分发器，不是一个额外的神经网络。模型配置中的 `model_type="qwen3"` 让它选择 `Qwen3ForCausalLM`；Tokenizer 配置则让它加载兼容的 `Qwen2TokenizerFast`。Tokenizer 类名中的 `Qwen2` 是实现复用的名称，不表示当前加载成了 Qwen2 模型。
 
 模型本地快照中的关键文件：
 
@@ -308,7 +312,7 @@ Prefill 时 `S=T=P=18`。第一轮 Decode 时 `S=1, T=19`。不要把 `S` 和 `T
 
 ## 3. 从用户请求到聊天模板：此时还没有张量计算
 
-**先看白话：** 聊天模板给文字补上“谁在说话、这一轮在哪里结束、接下来轮到谁”的标记。类似给对话加角色标签，文字内容此时还没经过模型。
+**先看白话：** 这一节只做字符串整理，不执行模型 forward。聊天模板把 Python 字典里的角色和内容，转换成模型约定的带边界标记的字符串；下一节才把这个字符串编码成 token ID。
 
 **代码定位：** [debug_official.py:53-57][entry-template]，入口代码：
 
@@ -341,6 +345,8 @@ text = tokenizer.apply_chat_template(
 ```
 
 角色名、边界标记、换行都属于模型接下来能看到的上下文。
+
+到这里的结果仍然是 Python 字符串 `text`，还不是 `input_ids`。只有执行 `tokenizer(text, return_tensors="pt")` 后，才会得到模型可以接收的整数张量。
 
 **代码定位：** [tokenizer_config.json:230][tokenizer-template] 的 `chat_template` 字符串。下面将其中末尾一段转义的换行展开为可读 Jinja；不是另一个独立的 `.jinja` 文件：
 
@@ -396,6 +402,8 @@ attention_mask = [[1] * 18]
 # shape: [1, 18]；本请求没有 padding
 ```
 
+这里的形状按 `[batch_size, sequence_length]` 读取：`[1,18]` 表示一条请求、18 个 token。`attention_mask` 与 `input_ids` 位置一一对应；本例没有 padding，所以 18 个位置全是 1。
+
 各位置的可读含义如下。这里展示解码后的文字，不是 byte-level BPE 的内部字节符号：
 
 | 位置 | ID | 含义 |
@@ -425,7 +433,7 @@ Markdown 表格里的 `\|` 只是转义竖线；实际特殊 token 中没有反�
 
 ### 4.2 Tokenizer 内部做什么
 
-简化理解 Fast Tokenizer 路径：
+这一节回答的是“字符串如何变成上面的整数列表”，不是“token ID 如何进入 Transformer”。简化理解 Fast Tokenizer 路径：
 
 ```text
 Python tokenizer(...)
@@ -448,13 +456,36 @@ len(tokenizer)       = 151669
 model.config.vocab_size = 151936
 ```
 
-它们分别对应基础词表大小、包含新增 token 的 Tokenizer 大小、模型的词表张量维度，不应不加区分地混用。分析 `logits.shape` 时以模型配置为准；不能假设每个输出维度都对应一个常用、可见的自然语言字符。
+它们分别表示：
+
+- `tokenizer.vocab_size`：Tokenizer 声明的基础词表大小。
+- `len(tokenizer)`：加入特殊 token 等扩展后，Tokenizer 可识别的条目数。
+- `model.config.vocab_size`：Embedding 和输出头实际分配的词表维度。
+
+这三个数字服务于不同对象，不能直接混用。模型输出 `logits` 的最后一维由 `model.config.vocab_size` 决定；其中的每个位置是一个候选 token ID，不等于一个汉字或一个可见字符。
 
 ## 5. `generate()`：建立生成过程的控制状态
 
 ### 5.1 调用参数如何影响行为
 
 **先看白话：** `generate()` 就是循环的组织者：让模型算一次、选一个 token、检查是否结束，再决定要不要继续。
+
+本例需要先区分三层配置：
+
+| 配置来源 | 本例的值 | 作用 |
+| --- | --- | --- |
+| `generation_config.json` 默认值 | `do_sample=True`、`temperature=0.6`、`top_k=20`、`top_p=0.95` | 如果调用时没有覆盖，就作为生成默认行为 |
+| 入口运行时修改 | `temperature=1.0`、`top_p=1.0`、`top_k=50` | `generate()` 调用前直接修改 `model.generation_config` |
+| `model.generate(...)` 调用参数 | `do_sample=False`、`max_new_tokens=16`、`use_cache=True` | 本次调用明确传入；同名参数优先于生成配置 |
+
+因此，本次运行的关键结论是：
+
+```text
+do_sample=False
+    -> 不进行随机采样
+    -> 生成模式是 GREEDY_SEARCH
+    -> 每轮选择处理后 logits 最大的 token（argmax）
+```
 
 **代码定位：** [debug_official.py:69-77][entry-generate]，入口代码：
 
@@ -468,7 +499,7 @@ with torch.inference_mode():
     )
 ```
 
-`**inputs` 是 Python 参数展开，等价于传入：
+`**inputs` 只是 Python 的字典参数展开，等价于显式传入 `input_ids` 和 `attention_mask`：
 
 **代码定位：** [debug_official.py:72-77][entry-generate]；下面是展开参数后的教学等价写法：
 
@@ -482,7 +513,7 @@ model.generate(
 )
 ```
 
-**配置定位：** [generation_config.json:2-11][generation-config]。下面把 JSON 配置写成 Python 赋值形式以便阅读：
+**默认配置定位：** [generation_config.json:2-11][generation-config]。下面列出的是配置文件中的默认值，不一定是本次调用的最终值：
 
 ```python
 do_sample = True
@@ -493,13 +524,15 @@ eos_token_id = [151645, 151643]
 pad_token_id = 151643
 ```
 
-入口把 `temperature/top_p/top_k` 改成 `1.0/1.0/50`，并在调用中用 `do_sample=False` 覆盖默认采样行为。在本次贪心路径中，temperature、top-k、top-p 这些采样处理不生效。
+入口代码没有改写磁盘上的 `generation_config.json`，但在加载后、调用 `generate()` 前，直接把内存中的 `model.generation_config` 改成了 `temperature/top_p/top_k = 1.0/1.0/50`。调用参数 `do_sample=False` 又覆盖了默认的 `do_sample=True`。由于本次走贪心分支，不会执行随机采样所需的 temperature、top-k、top-p 处理；这些值不会改变本次选出的 token。
 
-注意：模型结构配置中 `eos_token_id=151645`，但**本次生成使用的生成配置**里 EOS 是 `[151645, 151643]`。理解停止行为要看最终生效的 generation config。
+**停止条件也要看最终配置：** 模型结构配置中的 `eos_token_id` 是 `151645`，但本次生成配置中的 EOS 是 `[151645, 151643]`。因此生成出的 token 只要命中 `151645` 或 `151643` 任意一个，就可能触发停止；不能只根据模型结构配置中的单个值判断。
 
 ### 5.2 进入循环前准备了什么
 
 **代码定位：** [generation/utils.py:2362-2406][gen-prepare] 与 [generation/utils.py:1999-2008][gen-cache]；下面是本次路径的教学概括：
+
+这一阶段还没有逐个生成新 token。它先把“生成循环需要的状态”准备好：
 
 ```python
 input_ids = inputs.input_ids               # 完整逻辑序列，初始为 [1,18]
@@ -509,11 +542,11 @@ logits_to_keep = 1                         # 只需要最后位置的词表输�
 use_cache = True
 ```
 
-还会创建 logits processors、EOS/最大长度停止条件，准备特殊 token 张量，验证参数等。
+除此之外，还会创建 logits processors、EOS/最大长度停止条件，准备特殊 token 张量，并验证参数。可以把这一步理解为“搭好生成循环的运行环境”，而不是已经完成一次生成。
 
-在当前配置下，没有启用重复惩罚、强制 token 等额外 logits 处理，选 token 相当于直接对最后位置 logits 做 `argmax`。改变生成配置后，不能再假设处理器总是空的。
+本次配置没有启用重复惩罚、强制 token 等额外 logits 处理，所以选 token 时可以简化理解为：对最后位置的 logits 做 `argmax`。如果以后改变生成配置，logits 可能会先经过 processors，再进行选择，不能再假设处理器总是空的。
 
-`DynamicCache(config=...)` 根据模型层类型准备 28 个缓存层容器，K/V 张量在首次更新时初始化。这里没有因为最大长度是 34，就预先分配一整块长度 34 的 Static Cache。
+`DynamicCache(config=...)` 会根据模型的 28 层 Transformer 准备 28 个缓存层对象。此时主要是准备存放位置；每层真正的 K/V 张量会在第一次 forward 更新缓存时，按照实际输入长度初始化。它是动态增长的，因此不会因为 `max_length=34` 就提前为每层分配一整块长度为 34 的 Static Cache。
 
 ### 5.3 为什么贪心会进入 `_sample`
 
@@ -532,7 +565,19 @@ elif generation_mode in (GenerationMode.SAMPLE, GenerationMode.GREEDY_SEARCH):
     )
 ```
 
-`_sample` 是两种生成模式共用的循环名称。真正是否随机采样，要看循环里 `do_sample` 的分支，不能凭函数名判断。
+这里最容易误解的是函数名：`_sample` 不等于“本次一定随机采样”。它是当前 Transformers 版本中，贪心和随机采样共用的生成循环。
+
+本次实际路径可以写成：
+
+```text
+do_sample=False
+    -> generation_mode = GREEDY_SEARCH
+    -> GREEDY_SEARCH 也被分派到 _sample
+    -> 循环内部走 do_sample=False 分支
+    -> 对最后位置 logits 做 argmax
+```
+
+只有当 `do_sample=True` 时，`_sample` 内部才会按概率随机抽取 token。因此，判断生成方式要看 `do_sample` 和循环内部的分支，不能只看 `_sample` 这个函数名。
 
 ## 6. Prefill 与 Decode 的分界：准备本轮输入
 
@@ -540,15 +585,29 @@ elif generation_mode in (GenerationMode.SAMPLE, GenerationMode.GREEDY_SEARCH):
 
 **先看白话：** “已经输出多少内容”和“这一轮还要重新算多少内容”不是一回事。有缓存后，历史内容的计算结果还在，所以这一轮只需把最新的一小段送进模型。
 
-需要同时在脑中维护两份长度：
+这一节要区分三个状态。它们都在描述同一条序列，但用途不同：
 
 ```text
-generate 内部的 input_ids：
-    prompt + 所有已经生成的 token
+完整序列 input_ids：
+    prompt + 已经生成的 token
+    用于保存最终输出，也用于下一轮追加 token
 
 本轮 model_inputs["input_ids"]：
-    尚未计算并写入 KV Cache 的 token
+    本轮真正重新送入模型的 token
+
+KV Cache 的长度：
+    已经完成各层 K/V 计算并保存的 token 数量
 ```
+
+在本例中，三者随时间变化如下：
+
+| 时刻 | 完整序列长度 | 本轮送入模型 | forward 前缓存长度 |
+|---|---:|---:|---:|
+| Prefill | 18 | 18 个 prompt token | 0 |
+| 第一次 Decode | 19 | 刚生成的 1 个 token | 18 |
+| 第二次 Decode | 20 | 上一轮生成的 1 个 token | 19 |
+
+注意：表中 Decode 的“完整序列长度”包含刚刚选出的 token，但这个 token 要到下一轮才会作为输入送进模型。
 
 **代码定位：** [generation/utils.py:545-583][gen-inputs]，`prepare_inputs_for_generation()` 源码主干：
 
@@ -574,7 +633,7 @@ model_inputs["input_ids"] = input_ids.clone(
 input_ids = input_ids[:, cache_position]  # 教学解释，源码还有长度相等等分支
 ```
 
-第一次：
+Prefill（第一次 forward）：
 
 **代码定位：** [generation/utils.py:1788-1814][gen-initial-position]；以下为初始位置的教学等价写法：
 
@@ -583,14 +642,14 @@ cache_position = torch.arange(18, device=device)  # [0,1,...,17]
 # 缓存为空，因此模型收到所有 18 个 token。
 ```
 
-产生第一个新 token 后：
+Prefill 选出第一个新 token 后，准备下一轮 Decode：
 
 **代码定位：** [generation/utils.py:993-994][gen-next-position]；以下为下一轮位置的具体数值示意：
 
 ```python
-# 完整序列长度 19，但前 18 个位置已经有 K/V。
+# 完整序列长度已经变成 19，但前 18 个位置已有 K/V。
 cache_position = torch.tensor([18], device=device)
-# 模型本轮只收到位置 18 的一个 token。
+# 下一轮模型只收到位置 18 的这一个 token。
 ```
 
 因此，`use_cache=True` 不是让模型“跳过所有旧上下文”。旧上下文仍然通过 K/V 参加注意力，只是不重复计算它们的各层表示。
@@ -626,7 +685,7 @@ position_ids = position_ids[:, -current_input_length:]
 
 ### 7.1 外层模型先调用 Decoder 主体
 
-**先看白话：** 外层模型做两件事：先让 28 层网络处理输入，再把处理结果转成词表分数。这里先进入前一件事。
+**先看白话：** 到这里，`generate()` 已经准备好本轮输入；现在进入一次 `forward()`。外层模型做两件事：先让 28 层网络处理输入，再把处理结果转成词表分数。本节先看前一件事。
 
 **代码定位：** [modeling_qwen3.py:480-491][q-forward]，`Qwen3ForCausalLM.forward()` 源码主干：
 
@@ -644,11 +703,11 @@ hidden_states = outputs.last_hidden_state  # 28 层处理后的表示
 # lm_head 的部分在第 11 节展开。
 ```
 
-`self.model` 是 `Qwen3Model`，不是另一个独立服务，也不会再次分词。
+这里的 `self.model` 是 `Qwen3Model`，即 Embedding、28 层 Decoder 和最终 Norm 的组合；它不是另一个独立服务，也不会再次分词。它返回的 `hidden_states` 还不是词表分数，下一步由 `lm_head` 转换。
 
 ### 7.2 Embedding 是查表，不是对 ID 做数值运算
 
-**先看白话：** Embedding 为每个编号准备了一行数字。输入编号 `16`，就取出第 16 行。由此，只有“身份”的编号变成了可以参与计算的向量。
+**先看白话：** Embedding 为词表中的每个 token ID 准备一行可学习的浮点数。输入编号 `16` 时，只取第 16 行；这一步不把数字 `16` 当作数值参与加减，而是把它当作索引。
 
 **代码定位：** [modeling_qwen3.py:342][q-embedding-init]、[modeling_qwen3.py:370-371][q-embedding]，源码主干：
 
@@ -671,7 +730,7 @@ inputs_embeds = embedding_weight[input_ids]
 # inputs_embeds:  [B,S,H]
 ```
 
-Prefill 得到 `[1,18,1024]`，Decode 得到 `[1,1,1024]`。
+Prefill 的输入是 18 个 token，所以得到 `[1,18,1024]`；Decode 的输入只有 1 个 token，所以得到 `[1,1,1024]`。这里的 `S` 变化了，隐藏宽度 `H=1024` 没变。
 
 ID 16 和 17 的数字接近，不代表它们的语义距离接近；语义表示来自训练好的向量。
 
@@ -1000,7 +1059,7 @@ V 不做 RoPE。缓存里的 K 已经经过 Q/K Norm 中的 K Norm 和 RoPE；�
 
 ### 9.4 KV Cache：先加入当前 token，再参与注意力
 
-**先看白话：** Cache 存的是“历史内容已经算好的 K/V”。每来一个新 token，就把它的 K/V 追加进去。接下来当前 Q 读取的是“旧 K/V + 新 K/V”，不是只读取最新位置。
+**先看白话：** Cache 存的是“已经送入各层并算好的历史 K/V”。每次 forward 先为本轮输入计算 K/V，再把它们追加到旧缓存；随后，本轮的 Q 读取“旧 K/V + 本轮新 K/V”，而不是只读取最新位置。
 
 ![KV Cache 时间线：18 个 prompt、1 个新 token、再 1 个新 token](docs/learning/06-kv-timeline.svg)
 
@@ -1061,7 +1120,7 @@ Prefill:
   更新后: [1,8,19,128]
 ```
 
-更新先于注意力计算，所以当前 token 也能关注它自己。
+更新先于本轮注意力计算，所以本轮输入中的 token 也能关注自己。第一次 Decode 输入的是 Prefill 刚刚选出的 token；它不是在同一轮被选出来的下一个 token。
 
 虽然接口传入了 `cache_position/cos/sin`，本例的普通动态层核心是沿序列维 `cat`，不是按 `cache_position` 原地写固定槽位。Static Cache 等实现的更新策略不同。
 
@@ -1317,7 +1376,7 @@ last_hidden = hidden_states[:, -1:, :]  # Prefill: [1,18,1024] -> [1,1,1024]
 logits = self.lm_head(last_hidden)      # [1,1,151936]
 ```
 
-**这只是省去了前 17 个位置的词表投影，不是只让第 18 个 token 经过 Decoder。** 所有 prompt token 都需要经过各层，建立各层 KV Cache。
+**这只是省去了前 17 个位置的词表投影，不是只让第 18 个 token 经过 Decoder。** 18 个 prompt token 都经过 Embedding 和 28 层 Decoder，建立各层 KV Cache；完成后只取最后一个位置的 hidden state 做词表投影，因为只有它能预测第一个新 token。
 
 直接调用 `model(...)` 而不指定 `logits_to_keep` 时，其默认值是 0：
 
@@ -1370,7 +1429,7 @@ logits 是未归一化的分数，不是概率，也不是 token ID。其最后�
 
 ### 12.1 每轮生成的源码骨架
 
-**先看白话：** 现在网络已经交回打分表，循环做三件事：选编号、把编号接在末尾、检查要不要继续。下一轮收到的，就是这轮刚选出的编号。
+**先看白话：** 每一轮先处理本轮输入，再从最后一个位置得到候选分数；然后选出一个 token，追加到完整序列，最后检查是否停止。若继续，刚选出的 token 会在下一轮成为模型输入。
 
 **代码定位：** [generation/utils.py:2831-2960][gen-sample]；以下是 `_sample()` 与本例有关的主干：
 
@@ -1394,6 +1453,7 @@ while self._has_unfinished_sequences(
     else:
         outputs = model_forward(**model_inputs, return_dict=True)
 
+    # forward 已经更新了本轮的 KV；这里准备下一轮要使用的状态。
     model_kwargs = self._update_model_kwargs_for_generation(
         outputs, model_kwargs, is_encoder_decoder=False
     )
@@ -1479,7 +1539,7 @@ Prefill 后：
 下一轮 cache_position：[18]
 ```
 
-源码先更新这些状态，再选择 token 和拼接 ID。这不要求事先知道 token 内容：新位置编号与“它是有效位置”已经确定，具体 token ID 随后才填入。
+这段源码先更新缓存引用、`attention_mask` 和 `cache_position`，再选择 token、拼接完整 `input_ids`。这里更新的是“下一轮状态”，不是把尚未选出的 token 提前写进 KV Cache：新位置已确定为有效位置，但具体 token ID 要等本轮 `argmax` 或采样完成后才知道。
 
 历史缓存对象通常是同一个可变对象；传递 `outputs.past_key_values` 并不是把整个缓存搬回 CPU，再复制进下一轮 GPU。
 
@@ -1537,17 +1597,19 @@ EOS 检查的是新序列的最后一个 token。Prompt 中位置 9 的 `<|im_en
 1 次 Prefill + 15 次 Decode = 16 次模型 forward
 ```
 
-不要误算成“先 Prefill，再 Decode 16 次”。
+原因是：Prefill 处理 prompt 的同时，最后一个 prompt 位置的 logits 已经选出了第 1 个新 token。剩下的 15 个新 token，才分别由 15 次 Decode 产生。不要误算成“先 Prefill，再 Decode 16 次”。
 
 ### 13.2 为什么最终输出长度 34，缓存长度却是 33
 
 最后一次 forward：
 
 ```text
-消费：prompt + 前 15 个生成 token 中尚未缓存的最后那个 token
-缓存覆盖：18 + 15 = 33 个位置
-产生：第 16 个生成 token
-停止：达到 max_new_tokens=16
+forward 前完整序列：18 个 prompt token + 前 15 个生成 token = 33 个 token
+forward 前缓存长度：32
+本轮实际输入：其中尚未进入缓存的最后 1 个 token
+forward 后缓存长度：33
+根据最后位置 logits 产生第 16 个生成 token
+随后达到 max_new_tokens=16，循环停止
 ```
 
 最后一个新 token 没有再被送入模型，因此还没有它的 K/V。
@@ -1591,6 +1653,8 @@ tokenizer.decode(...)
 
 ## 15. 关闭 KV Cache 后，究竟多算了什么
 
+这一节只比较“每次送入 Decoder 的 token 数量”和“哪些历史表示被重复计算”，不把 token 数量直接当成总 FLOPs。
+
 入口把 `USE_CACHE=False` 后：
 
 ```text
@@ -1613,7 +1677,7 @@ forward 3 输入长度：1
 forward 16 输入长度：1
 ```
 
-仅从送入 Decoder 的 token-position 数量看：
+只统计送入 Decoder 的 token-position 数量：
 
 ```text
 有缓存：18 + 15 = 33
@@ -1622,7 +1686,7 @@ forward 16 输入长度：1
 
 **这不是总 FLOPs 直接减少到 `33/408` 的精确结论。** 注意力的历史 K/V 读取、不同形状的矩阵运算效率、词表投影等不能用这一项完全代表。
 
-缓存省掉的是历史 token 的重复表示计算；没有省掉的是：
+因此，缓存主要省掉了历史 token 的重复表示计算；它没有省掉：
 
 - 新 token 在所有 28 层的 Q/K/V 投影、Norm、RoPE、MLP 等。
 - 当前 Q 对历史 K 的打分，以及对历史 V 的加权汇总。
@@ -1633,11 +1697,11 @@ forward 16 输入长度：1
 
 ## 16. 完整实验：不调用 `generate()`，自己管理生成循环
 
-前面把一个请求拆开解释，现在重新拼成一个可运行程序。
+前面把一个请求拆开解释，现在重新拼成一个可运行程序。代码中的 `manual_generate()` 负责控制循环，但每一轮的神经网络计算仍然调用官方 `model(...)`。
 
 下面代码在项目目录、使用本项目 `.venv` 的 Python 中运行。它导入入口中的常量与库，但不会触发 `entry.main()`，因为入口有 `if __name__ == "__main__"` 保护。
 
-这个版本限定为**本例的单序列、无 padding、无额外 logits processor 的贪心生成**，不是可以替代 Transformers 全部生成模式的通用框架。
+这个版本限定为**本例的单序列、无 padding、无额外 logits processor 的贪心生成**，不是可以替代 Transformers 全部生成模式的通用框架。它没有实现 beam search、随机采样、批量序列或复杂的停止条件。
 
 **代码定位：** 这是本文编写的独立教学实验，不存在一份同名的官方脚本。模型加载和前处理对应 [debug_official.py:27-64][entry-setup]，手写循环对应 [generation/utils.py:2831-2960][gen-sample]。它复用官方网络，不调用官方生成循环来产生 `manual_ids`。
 
@@ -1778,7 +1842,7 @@ print("回答:", tokenizer.decode(
 ```
 <!-- /runnable: manual-greedy -->
 
-代码中 `.item()` 和打印是为了教学观测，会引入同步，不应直接作为高性能 token loop 的实现模板。
+代码中 `.item()`、断言和打印是为了教学观测，会引入同步或额外开销，不应直接作为高性能 token loop 的实现模板。
 
 你应该观察的不是只有最后答案，还包括：
 
@@ -1797,7 +1861,7 @@ print("回答:", tokenizer.decode(
 [18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33]
 ```
 
-这段实验把框架职责显式化：网络仍然使用官方 Qwen3，而你亲自维护了输入裁剪、位置、缓存、token 选择、序列追加和停止状态。
+这段实验把框架职责显式化：网络仍然使用官方 Qwen3，而循环控制由你亲自维护。具体包括输入裁剪、位置、缓存、token 选择、序列追加和停止状态。
 
 **本地验证结果：**
 
@@ -1810,6 +1874,8 @@ print("回答:", tokenizer.decode(
 ## 17. 从 AI Infra 视角理解这条路径
 
 ### 17.1 参数、激活、KV Cache 是三类不同内存
+
+先区分三个对象：参数属于模型、激活属于当前计算、KV Cache 属于当前请求。它们都可能出现在设备内存中，但生命周期和复用范围不同。
 
 **模型参数：** 所有请求共享的训练结果。当前模型实测唯一参数量为 `596,049,920`，约为 0.6B；Embedding 与输出头共享时不能按两个独立权重矩阵重复计数。
 
@@ -1843,6 +1909,8 @@ Prefill 后 T=18：
 CPU FP32 缓存按元素大小计算会翻倍。真实服务中的并发、不同请求长度、KV 量化、TP 切分、分页与共享前缀也会改变实际占用。
 
 ### 17.2 Prefill 和 Decode 为什么表现不同
+
+这里的“表现不同”指计算形状和常见性能倾向，不是说两者执行了两套不同的模型。
 
 Prefill 一次处理多个 token：
 
@@ -1891,6 +1959,8 @@ FlashAttention 一类实现以分块与融合方式计算同样的注意力语�
 
 ### 17.4 Dynamic Cache、Static Cache 与 Paged KV
 
+三者保存的仍然是每层的 K/V，主要区别在于内存如何分配、增长和定位：
+
 | 方式 | 基本思路 | 需要关注的问题 |
 |---|---|---|
 | 本例 Dynamic Cache | 每层沿序列维拼接 K/V | `cat` 分配和复制、增长中的地址与形状 |
@@ -1923,6 +1993,8 @@ Prefix Cache 是跨请求复用兼容前缀的 K/V。本例的 KV Cache 只是�
 Tensor Parallel、Pipeline Parallel、CUDA Graph、Chunked Prefill、投机解码都属于进一步的执行或调度机制，本次脚本没有启用。理解它们时，可以反过来问：它们在上表中改变了哪一部分，哪些模型数学不变？
 
 ### 17.6 延迟指标怎样对应代码
+
+这些指标描述的是一次请求中不同时间段的耗时；本脚本没有队列和流式输出，所以只能直接测到端到端生成耗时。
 
 ```text
 冷启动：
@@ -1967,7 +2039,7 @@ elapsed = time.perf_counter() - t0
 
 ## 18. 张量速查表
 
-以下比较 Prefill 与第一次 Decode，`T` 均指当前 K/V 已加入之后的长度：
+以下比较 Prefill 与第一次 Decode。表中 `T` 指本轮 K/V 已加入后的可见长度；“本轮新增 K/V”只指本轮输入刚算出来的那一段。
 
 | 张量或步骤 | Prefill | 第一次 Decode |
 |---|---|---|
