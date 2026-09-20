@@ -30,7 +30,11 @@ Python 中的用户请求
 
 ## 0. 阅读边界与实验基准
 
+**本节目的：** 固定本文的模型、环境和覆盖范围，避免把本例结论误套到其他版本或推理系统。
+
 ### 0.0 先用白话理解：模型在反复“续写下一小段”
+
+**本节目的：** 先建立“模型每轮只预测一个 token”的直觉，后文所有循环细节都围绕它展开。
 
 你输入“1加1等于几？”，模型不是一次性返回一篇写好的答案。它反复做的是：
 
@@ -48,6 +52,8 @@ Python 中的用户请求
 第一遍阅读每一步都可以追问四件事：**输入是什么？这一步做了什么？输出是什么？输出由谁在下一步使用？** 公式和性能细节可以第二遍再看。
 
 ### 0.1 本文对应什么版本
+
+**本节目的：** 固定代码、依赖和模型基准，使源码行号、张量形状和运行结果可对应。
 
 以下内容核对自本项目的实际环境，而不是笼统描述所有 Qwen 模型：
 
@@ -84,6 +90,8 @@ Python 中的用户请求
 
 ### 0.2 先记住四个对象
 
+**本节目的：** 区分 Tokenizer、模型、`generate()` 和 KV Cache 的职责，避免后文混淆。
+
 | 对象 | 职责 | 不负责什么 |
 |---|---|---|
 | `tokenizer` | 字符串与 token ID 之间的转换 | 不执行 Transformer 的数学计算 |
@@ -96,6 +104,8 @@ Python 中的用户请求
 > `forward()` 计算“接下来各 token 有多合适”；`generate()` 决定“选哪个 token，是否再算一轮”。
 
 ## 1. 全局地图：一次请求实际经过哪些函数
+
+**本节目的：** 在进入细节前先看到完整调用链，知道每个后续章节位于哪一步。
 
 **先看白话：** 请求可以分成四个阶段：加载模型、把对话整理并编码成 token、反复计算并选择新 token、把新增 token 解码成文字。模型加载只发生在启动阶段，不会每生成一个 token 就重新加载一次。
 
@@ -155,7 +165,11 @@ debug_official.main()
 
 ## 2. 初始化：先把“模型机器”准备好
 
+**本节目的：** 说明推理开始前如何定位文件、选择设备，并加载分词器和模型。
+
 ### 2.1 缓存目录在导入之前设置
+
+**本节目的：** 说明模型文件从哪里读取，并区分磁盘模型缓存和运行时 KV Cache。
 
 **先看白话：** 先告诉库“模型文件放在哪里”。这是找文件，不是让模型回答问题。
 
@@ -187,6 +201,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 ### 2.2 设备选择与 dtype
 
+**本节目的：** 说明模型放在哪个设备、采用何种精度，以及这不会改变 token ID 的整数性质。
+
 **代码定位：** [debug_official.py:27-31][entry-device]，把一行设备选择展开成多行，行为不变：
 
 ```python
@@ -212,6 +228,8 @@ dtype = torch.float32 if device == "cpu" else torch.float16
 快照配置中的 `torch_dtype` 是 `bfloat16`，但入口显式传入 `dtype`，所以本次实际加载成 FP16。这是脚本策略，不代表 Qwen3 只能使用 FP16。
 
 ### 2.3 `from_pretrained` 到底做了什么
+
+**本节目的：** 区分 Tokenizer 与模型的加载过程，理解配置如何决定实际模型类和权重。
 
 **代码定位：** [debug_official.py:35-42][entry-load]，入口代码：
 
@@ -269,6 +287,8 @@ with torch.inference_mode():   # 关闭梯度记录及一些额外跟踪开销
 
 ### 2.4 这台模型机器的尺寸
 
+**本节目的：** 给后文张量形状、注意力头和 KV Cache 大小准备统一的配置数值与符号。
+
 | 配置项 | 数值 | 含义 |
 |---|---:|---|
 | `vocab_size` | 151936 | Embedding 和输出头的词表维度 |
@@ -311,6 +331,8 @@ Prefill 时 `S=T=P=18`。第一轮 Decode 时 `S=1, T=19`。不要把 `S` 和 `T
 再看 `[1,16,18,128]`：一条请求，分成 16 个注意力头，每个头处理 18 个位置，每个位置使用 128 个数字。所谓“拆头”，就是把一大组数字分成几组来算，不是在复制出 16 个完整模型。
 
 ## 3. 从用户请求到聊天模板：此时还没有张量计算
+
+**本节目的：** 说明用户消息如何先变成 Qwen 对话格式字符串，尚未进入模型计算。
 
 **先看白话：** 这一节只做字符串整理，不执行模型 forward。聊天模板把 Python 字典里的角色和内容，转换成模型约定的带边界标记的字符串；下一节才把这个字符串编码成 token ID。
 
@@ -369,7 +391,11 @@ text = tokenizer.apply_chat_template(
 
 ## 4. Tokenizer：把文字变成整数序列
 
+**本节目的：** 说明聊天模板字符串如何变成模型可接收的 `input_ids` 和 `attention_mask`。
+
 ### 4.1 入口与实际结果
+
+**本节目的：** 查看本次请求实际得到的 token ID、长度和各位置的可读含义。
 
 **先看白话：** Tokenizer 把每段文字换成一个编号。编号只是查表用的，`16` 不表示语义强度是 `8` 的两倍。
 
@@ -433,6 +459,8 @@ Markdown 表格里的 `\|` 只是转义竖线；实际特殊 token 中没有反�
 
 ### 4.2 Tokenizer 内部做什么
 
+**本节目的：** 概括 Fast Tokenizer 如何编码字符串，并澄清词表大小相关数字的不同含义。
+
 这一节回答的是“字符串如何变成上面的整数列表”，不是“token ID 如何进入 Transformer”。简化理解 Fast Tokenizer 路径：
 
 ```text
@@ -466,7 +494,11 @@ model.config.vocab_size = 151936
 
 ## 5. `generate()`：建立生成过程的控制状态
 
+**本节目的：** 说明 `generate()` 如何把一次模型 forward 组织成持续生成多个 token 的循环。
+
 ### 5.1 调用参数如何影响行为
+
+**本节目的：** 找出本次生成最终生效的配置，并确定为何走贪心而不是随机采样。
 
 **先看白话：** `generate()` 就是循环的组织者：让模型算一次、选一个 token、检查是否结束，再决定要不要继续。
 
@@ -530,6 +562,8 @@ pad_token_id = 151643
 
 ### 5.2 进入循环前准备了什么
 
+**本节目的：** 列出循环启动前创建的长度限制、停止条件、缓存和 logits 处理状态。
+
 **代码定位：** [generation/utils.py:2362-2406][gen-prepare] 与 [generation/utils.py:1999-2008][gen-cache]；下面是本次路径的教学概括：
 
 这一阶段还没有逐个生成新 token。它先把“生成循环需要的状态”准备好：
@@ -550,20 +584,24 @@ use_cache = True
 
 ### 5.3 为什么贪心会进入 `_sample`
 
-**代码定位：** [generation/utils.py:2537-2549][gen-dispatch]，源码主干：
+**本节目的：** 消除函数名带来的误解，说明贪心与随机采样如何复用同一个循环实现。
+
+**这段代码要解决什么问题？** 前面已经根据配置判定了生成模式；这里选择具体的循环函数。当前 Transformers 版本让“随机采样”和“贪心”复用同一个 `_sample()` 循环，区别留到循环内部的 `do_sample` 分支处理。
 
 ```python
 elif generation_mode in (GenerationMode.SAMPLE, GenerationMode.GREEDY_SEARCH):
     result = self._sample(
-        input_ids,
-        logits_processor=prepared_logits_processor,
-        stopping_criteria=prepared_stopping_criteria,
-        generation_config=generation_config,
+        input_ids,                                       # 当前完整序列
+        logits_processor=prepared_logits_processor,      # 选 token 前修改分数的规则
+        stopping_criteria=prepared_stopping_criteria,    # EOS、最大长度等停止规则
+        generation_config=generation_config,             # 本次最终生效的配置
         synced_gpus=synced_gpus,
         streamer=streamer,
-        **model_kwargs,
+        **model_kwargs,                                  # cache、mask、位置等循环状态
     )
 ```
+
+**代码定位：** [generation/utils.py:2537-2549][gen-dispatch]；上面是模式分派主干，并补充了参数职责。
 
 这里最容易误解的是函数名：`_sample` 不等于“本次一定随机采样”。它是当前 Transformers 版本中，贪心和随机采样共用的生成循环。
 
@@ -581,9 +619,26 @@ do_sample=False
 
 ## 6. Prefill 与 Decode 的分界：准备本轮输入
 
+**本节目的：** 说明同一条序列在首次处理和后续生成时，为何送进模型的 token 数量不同。
+
 ### 6.1 生成循环保留完整序列，模型只接收未缓存部分
 
-**先看白话：** “已经输出多少内容”和“这一轮还要重新算多少内容”不是一回事。有缓存后，历史内容的计算结果还在，所以这一轮只需把最新的一小段送进模型。
+**本节目的：** 通过 KV Cache 解释完整序列、本轮输入和缓存长度为何是三个不同状态。
+
+**先理解 KV Cache：** 每个 Decoder 层在处理一个 token 时，都会算出该 token 的 Key（K）和 Value（V）。KV Cache 就是把这些历史 K/V 按层保存下来；它不保存模型权重，也不直接保存原始文本。
+
+下一轮生成时，历史 token 不必重新经过 Embedding、28 层 Decoder、Q/K/V 投影和 MLP。模型会把本轮新 token 算出的 Q，与 Cache 中历史 token 的 K/V 一起做 Attention，因此仍然能读取完整上下文。
+
+```text
+上一轮处理完 token 0..17：
+    每层 KV Cache 已保存位置 0..17 的 K/V
+
+下一轮处理位置 18：
+    只计算位置 18 的新 Q/K/V
+    新 Q 读取 Cache 中位置 0..17 的 K/V，以及本轮位置 18 的 K/V
+```
+
+**再看本节问题：** “已经输出多少内容”和“这一轮还要重新算多少内容”不是一回事。有 KV Cache 后，历史内容的计算结果仍可读取，所以这一轮只需把最新的一小段送进模型。
 
 这一节要区分三个状态。它们都在描述同一条序列，但用途不同：
 
@@ -609,20 +664,39 @@ KV Cache 的长度：
 
 注意：表中 Decode 的“完整序列长度”包含刚刚选出的 token，但这个 token 要到下一轮才会作为输入送进模型。
 
-**代码定位：** [generation/utils.py:545-583][gen-inputs]，`prepare_inputs_for_generation()` 源码主干：
+**这段代码要解决什么问题？** `generate()` 手里拿的是完整序列，但 `forward()` 只应接收本轮尚未写入缓存的 token。下面的代码就是把“完整生成状态”整理成“本轮 `forward()` 参数”：
 
 ```python
 model_inputs["cache_position"] = cache_position
+# 告诉模型：本轮输入 token 对应序列中的哪些位置。
+# Prefill 时是 [0, 1, ..., 17]；第一次 Decode 时是 [18]。
 
 if past_key_values is not None:
     model_inputs["past_key_values"] = past_key_values
+    # 把已经计算好的历史 K/V 一并传给 forward，供本轮 Attention 读取。
+
     inputs_embeds, input_ids = self._cache_dependant_input_preparation(
         input_ids, inputs_embeds, cache_position
     )
+    # 关键步骤：依据 cache_position 裁剪完整 input_ids，
+    # 只保留“还没有计算过 K/V”的 token。
+    # 本例第一次 Decode：完整长度 19 -> 本轮 input_ids 长度 1。
 
 model_inputs["input_ids"] = input_ids.clone(
     memory_format=torch.contiguous_format
 )
+# 将裁剪后的本轮 token 写入返回字典；下一步实际调用 model(**model_inputs)。
+```
+
+**代码定位：** [generation/utils.py:545-583][gen-inputs]；上面是保留本例主线后的源码，并补充了教学注释。
+
+这段函数本身不计算 Attention，不选择下一个 token，也不写入新的 K/V；它只负责准备参数。可把它理解为：
+
+```text
+完整 input_ids + 历史 KV Cache
+        -> 按 cache_position 裁剪
+        -> 返回本轮 model_inputs
+        -> model(**model_inputs) 才开始 forward
 ```
 
 普通缓存路径下，输入切片可以理解为：
@@ -656,6 +730,8 @@ cache_position = torch.tensor([18], device=device)
 
 ### 6.2 `position_ids` 与 `cache_position`
 
+**本节目的：** 区分“token 在语义序列中的位置”和“本轮 token 对应的缓存位置”，理解它们为何常常数值相同却职责不同。
+
 **代码定位：** [generation/utils.py:588-616][gen-position-ids]，生成准备阶段的位置计算主干：
 
 ```python
@@ -683,43 +759,53 @@ position_ids = position_ids[:, -current_input_length:]
 
 ## 7. 进入模型：Embedding、因果掩码与位置编码
 
+**本节目的：** 跟踪本轮 token 如何从整数 ID 变成带位置、带可见性约束的模型内部向量。
+
 ### 7.1 外层模型先调用 Decoder 主体
+
+**本节目的：** 明确 `Qwen3ForCausalLM.forward()` 如何把准备好的输入交给真正的 Decoder 网络。
 
 **先看白话：** 到这里，`generate()` 已经准备好本轮输入；现在进入一次 `forward()`。外层模型做两件事：先让 28 层网络处理输入，再把处理结果转成词表分数。本节先看前一件事。
 
-**代码定位：** [modeling_qwen3.py:480-491][q-forward]，`Qwen3ForCausalLM.forward()` 源码主干：
+**这段代码要解决什么问题？** 外层 `Qwen3ForCausalLM` 不自己逐层计算 Attention；它把本轮输入和缓存交给内部的 `Qwen3Model`，再取得处理后的隐藏表示。下面是调用边界：
 
 ```python
 outputs = self.model(
-    input_ids=input_ids,
-    attention_mask=attention_mask,
-    position_ids=position_ids,
-    past_key_values=past_key_values,
-    use_cache=use_cache,
-    cache_position=cache_position,
+    input_ids=input_ids,                # 本轮实际输入：Prefill 为 18 个，Decode 为 1 个
+    attention_mask=attention_mask,      # 完整可见序列的有效位置
+    position_ids=position_ids,          # 本轮 token 的语义位置，供 RoPE 使用
+    past_key_values=past_key_values,    # 之前已算好的各层 K/V
+    use_cache=use_cache,                # 是否在本轮把新 K/V 写入缓存
+    cache_position=cache_position,      # 本轮 token 写入/对应的序列位置
 )
 
 hidden_states = outputs.last_hidden_state  # 28 层处理后的表示
 # lm_head 的部分在第 11 节展开。
 ```
 
+**代码定位：** [modeling_qwen3.py:480-491][q-forward]；上面是源码主干，并补充了本例参数含义。
+
 这里的 `self.model` 是 `Qwen3Model`，即 Embedding、28 层 Decoder 和最终 Norm 的组合；它不是另一个独立服务，也不会再次分词。它返回的 `hidden_states` 还不是词表分数，下一步由 `lm_head` 转换。
 
 ### 7.2 Embedding 是查表，不是对 ID 做数值运算
 
+**本节目的：** 解释整数 token ID 如何通过查表变成 1024 维浮点向量。
+
 **先看白话：** Embedding 为词表中的每个 token ID 准备一行可学习的浮点数。输入编号 `16` 时，只取第 16 行；这一步不把数字 `16` 当作数值参与加减，而是把它当作索引。
 
-**代码定位：** [modeling_qwen3.py:342][q-embedding-init]、[modeling_qwen3.py:370-371][q-embedding]，源码主干：
+**这段代码要解决什么问题？** Transformer 不能直接对整数 ID 做矩阵计算。这里先创建一张“ID 到向量”的表，再按 `input_ids` 逐位置取行，得到可送进 Decoder 的浮点张量。
 
 ```python
 self.embed_tokens = nn.Embedding(
-    config.vocab_size,   # 151936 行
-    config.hidden_size,  # 每行 1024 个浮点数
-    self.padding_idx,
+    config.vocab_size,   # 151936：可索引的 token ID 行数
+    config.hidden_size,  # 1024：每个 token ID 对应一行 1024 维向量
+    self.padding_idx,    # 若存在 padding，指定其对应的特殊行
 )
 
-inputs_embeds = self.embed_tokens(input_ids)
+inputs_embeds = self.embed_tokens(input_ids)  # [B,S] 的整数 ID -> [B,S,1024] 的浮点向量
 ```
+
+**代码定位：** [modeling_qwen3.py:342][q-embedding-init]、[modeling_qwen3.py:370-371][q-embedding]；上面是 Embedding 初始化与查表主干。
 
 **代码定位：** [modeling_qwen3.py:370-371][q-embedding]；下面用数组索引解释查表，不是该行源码的原样拷贝：
 
@@ -736,6 +822,8 @@ ID 16 和 17 的数字接近，不代表它们的语义距离接近；语义表�
 
 ### 7.3 二维 padding mask 如何变成四维 causal mask
 
+**本节目的：** 解释“有效位置”信息如何变成 Attention 中禁止读取未来 token 的具体掩码。
+
 **先看白话：** 有两种不同的“遮挡”：padding mask 遮住为了凑齐长度而填的空位；causal mask 遮住当前 token 后面的内容，避免它提前偷看未来。
 
 ![因果掩码：每一行只能读取自己及之前的位置](docs/learning/02-causal-mask.svg)
@@ -744,19 +832,19 @@ ID 16 和 17 的数字接近，不代表它们的语义距离接近；语义表�
 
 入口传入的 `[1,18]` 全 1 mask 只表示“没有 padding”，**本身没有表达不许看未来**。
 
-`Qwen3Model.forward()` 调用：
+**这段代码要解决什么问题？** 入口传入的二维 `attention_mask` 只标记 padding；这里根据当前位置和缓存长度构造真正限制“谁能看谁”的因果 mask，并按 Attention 层类型保存。
 
-**代码定位：** [modeling_qwen3.py:385-399][q-mask]，将参数字典展开后的源码主干：
+**代码定位：** [modeling_qwen3.py:385-399][q-mask]；下面将参数字典展开，并补充各参数的作用：
 
 ```python
 causal_mask_mapping = {
-    "full_attention": create_causal_mask(
-        config=self.config,
-        input_embeds=inputs_embeds,
-        attention_mask=attention_mask,
-        cache_position=cache_position,
-        past_key_values=past_key_values,
-        position_ids=position_ids,
+    "full_attention": create_causal_mask(  # 本例所有 28 层都使用这一种 mask
+        config=self.config,                # 模型的 attention 类型等配置
+        input_embeds=inputs_embeds,        # 用于确定本轮 query 长度与 dtype
+        attention_mask=attention_mask,     # 二维有效位置信息
+        cache_position=cache_position,     # 本轮 query 对应的绝对位置
+        past_key_values=past_key_values,   # 用于得知历史 K/V 长度
+        position_ids=position_ids,         # padding 等情况下辅助确定位置
     ),
 }
 ```
@@ -796,25 +884,30 @@ FP16 的 `m=-65504`；不要把源码中的这个值严格说成浮点 `-inf`。
 
 ### 7.4 RoPE 的 cos/sin 每次 forward 计算一次，供各层共用
 
-**代码定位：** [modeling_qwen3.py:404-424][q-layers]，源码主干：
+**本节目的：** 说明位置编号如何生成 RoPE 所需的 `cos/sin`，以及为什么 28 层可以共享这份数据。
+
+**这段代码要解决什么问题？** 先从 token ID 查出向量，再为本轮位置计算一份 RoPE 的 `cos/sin`；随后让同一份位置数据被 28 个 Decoder 层重复使用，最后做一次总的 RMSNorm。
 
 ```python
 hidden_states = inputs_embeds
 position_embeddings = self.rotary_emb(hidden_states, position_ids)
+# position_embeddings 是 (cos, sin)，形状为 [B,S,128]；此时尚未旋转 Q/K。
 
 for decoder_layer in self.layers:
     hidden_states = decoder_layer(
-        hidden_states,
+        hidden_states,  # 上一层输出；第 0 层时就是 Embedding 结果
         attention_mask=causal_mask_mapping[decoder_layer.attention_type],
         position_ids=position_ids,
         past_key_values=past_key_values,
         use_cache=use_cache,
         cache_position=cache_position,
-        position_embeddings=position_embeddings,
+        position_embeddings=position_embeddings,  # 各层共享，不必重复计算 cos/sin
     )
 
-hidden_states = self.norm(hidden_states)
+hidden_states = self.norm(hidden_states)  # 所有 Decoder 层之后的最终 RMSNorm
 ```
+
+**代码定位：** [modeling_qwen3.py:404-424][q-layers]；上面是源码主干，并补充了数据流注释。
 
 `position_embeddings` 是 `(cos, sin)`，不是把一个位置向量加到 Embedding 上。真正的旋转在每一层的 Q/K 上执行。
 
@@ -842,6 +935,8 @@ sin = emb.sin().to(dtype)
 
 ## 8. 一层 Decoder 的完整骨架
 
+**本节目的：** 先把单层 Decoder 中 Attention、MLP 和两次残差连接的顺序串起来。
+
 **先看白话：** 一层主要做两次加工。Attention 负责“从其他位置取有用信息”，MLP 负责“整理当前位置的特征”。每次加工后，都把结果加回原来的表示，不把原内容直接丢掉。
 
 ![Decoder 层：Attention 与 MLP 两次加工，每次都有残差相加](docs/learning/03-decoder-layer.svg)
@@ -850,29 +945,31 @@ sin = emb.sin().to(dtype)
 
 28 层的代码结构相同，但每层参数不同，缓存也各自独立。
 
-**代码定位：** [modeling_qwen3.py:257-277][q-decoder]，`Qwen3DecoderLayer.forward()` 源码主干：
+**这段代码要解决什么问题？** 一个 Decoder 层接收 `[B,S,1024]` 的表示，依次经过 Attention 和 MLP；每个子模块的结果都加回输入，因此输出形状保持 `[B,S,1024]`，可继续交给下一层。
 
 ```python
 residual = hidden_states                        # 保留层输入 [B,S,1024]
-hidden_states = self.input_layernorm(hidden_states)
+hidden_states = self.input_layernorm(hidden_states)  # 先归一化，再进入 Attention
 
 hidden_states, _ = self.self_attn(
-    hidden_states=hidden_states,
-    attention_mask=attention_mask,
+    hidden_states=hidden_states,                # 归一化后的本层输入
+    attention_mask=attention_mask,              # 不能读取未来的位置
     position_ids=position_ids,
-    past_key_values=past_key_values,
+    past_key_values=past_key_values,            # 历史 K/V
     use_cache=use_cache,
     cache_position=cache_position,
-    position_embeddings=position_embeddings,
+    position_embeddings=position_embeddings,    # 本轮的 RoPE cos/sin
 )
 hidden_states = residual + hidden_states        # 第一次残差相加
 
-residual = hidden_states
-hidden_states = self.post_attention_layernorm(hidden_states)
-hidden_states = self.mlp(hidden_states)
+residual = hidden_states                        # 保存 Attention 后的表示
+hidden_states = self.post_attention_layernorm(hidden_states)  # MLP 前的归一化
+hidden_states = self.mlp(hidden_states)         # 逐 token 的非线性变换
 hidden_states = residual + hidden_states        # 第二次残差相加
 return hidden_states                           # 仍然是 [B,S,1024]
 ```
+
+**代码定位：** [modeling_qwen3.py:257-277][q-decoder]；上面是源码主干，并补充了每一步的输入输出职责。
 
 数学结构：
 
@@ -887,21 +984,25 @@ y = u + MLP(RMSNorm(u))
 
 ### 8.1 RMSNorm 做了什么
 
+**本节目的：** 说明 RMSNorm 如何稳定每个 token 向量的数值尺度而不改变张量形状。
+
 **先看白话：** 它把每个 token 那一行数字的整体大小调到较稳定的尺度，再乘上学到的缩放系数。它调整的是数字的尺度，不会删掉 token，也不会变成一句人话。
 
-**代码定位：** [modeling_qwen3.py:59-64][q-rmsnorm]，源码主干：
+**这段代码要解决什么问题？** 对每个 token 的 1024 维向量，先计算均方根大小，再按该大小缩放，使数值尺度更稳定；最后乘上可学习的逐维权重。输入和输出形状不变。
 
 ```python
-input_dtype = hidden_states.dtype
-hidden_states = hidden_states.to(torch.float32)
+input_dtype = hidden_states.dtype                 # 记住原 dtype，例如 FP16
+hidden_states = hidden_states.to(torch.float32)   # 归一化统计先用 FP32 计算
 
-variance = hidden_states.pow(2).mean(-1, keepdim=True)
+variance = hidden_states.pow(2).mean(-1, keepdim=True)  # 每个 token 沿最后一维求均方值
 hidden_states = hidden_states * torch.rsqrt(
-    variance + self.variance_epsilon
+    variance + self.variance_epsilon               # 1 / sqrt(variance + eps)
 )
 
-return self.weight * hidden_states.to(input_dtype)
+return self.weight * hidden_states.to(input_dtype)  # 转回原 dtype，并逐维缩放
 ```
+
+**代码定位：** [modeling_qwen3.py:59-64][q-rmsnorm]；上面是 RMSNorm 主干，并补充了数值含义。
 
 对每个 token 向量，公式是：
 
@@ -919,6 +1020,8 @@ Decoder 中两处 RMSNorm 的特征宽度是 1024。注意力内部还有 Q/K �
 
 ## 9. Attention：从当前表示读取整个可见上下文
 
+**本节目的：** 解释当前 token 如何利用 Q、K、V 和因果约束从历史上下文提取信息。
+
 **先看白话：** 对当前 token 来说，前面的每个位置都可能有帮助。Attention 先算“各位置有多相关”，再按相关程度汇总它们的信息。
 
 ![Attention：当前 Q 匹配所有可见 K，再按权重汇总 V](docs/learning/04-attention.svg)
@@ -926,6 +1029,8 @@ Decoder 中两处 RMSNorm 的特征宽度是 1024。注意力内部还有 Q/K �
 图 4：Q 用来发起匹配，K 用来接受匹配，V 是实际汇总的内容。绿色分支来自缓存及本轮新增 K/V；蓝色分支是本轮 Q 的计算。对应 [modeling_qwen3.py:197-230][q-attention]、[modeling_qwen3.py:142-155][q-eager]。
 
 ### 9.1 投影：同一个输入产生 Q、K、V
+
+**本节目的：** 说明一份隐藏表示如何经过不同线性层得到用于匹配和汇总的 Q/K/V。
 
 **代码定位：** [modeling_qwen3.py:171-184][q-projections]；把配置值代入后的初始化主干：
 
@@ -967,26 +1072,30 @@ y = x @ weight.T  # 本例没有 bias
 
 ### 9.2 拆头、Q/K Norm 与转置
 
-**代码定位：** [modeling_qwen3.py:197-202][q-split-heads]，源码主干：
+**本节目的：** 跟踪 Q/K/V 如何变为多头形状，并理解 Q/K 与 V 的头数为何不同。
+
+**这段代码要解决什么问题？** Attention 需要把当前层的 `[B,S,1024]` 表示投影为 Q/K/V，并把末维拆成多个头。Q 有 16 个头，K/V 只有 8 个头，原因会在 GQA 一节解释。
 
 ```python
 input_shape = hidden_states.shape[:-1]  # (B,S)
-hidden_shape = (*input_shape, -1, self.head_dim)
+hidden_shape = (*input_shape, -1, self.head_dim)  # -1 自动推导头数
 
 query_states = self.q_norm(
-    self.q_proj(hidden_states).view(hidden_shape)
-).transpose(1, 2)
+    self.q_proj(hidden_states).view(hidden_shape)  # [B,S,2048] -> [B,S,16,128]
+).transpose(1, 2)                                 # -> [B,16,S,128]
 
 key_states = self.k_norm(
-    self.k_proj(hidden_states).view(hidden_shape)
-).transpose(1, 2)
+    self.k_proj(hidden_states).view(hidden_shape)  # [B,S,1024] -> [B,S,8,128]
+).transpose(1, 2)                                 # -> [B,8,S,128]
 
 value_states = (
-    self.v_proj(hidden_states)
-    .view(hidden_shape)
-    .transpose(1, 2)
+    self.v_proj(hidden_states)                     # [B,S,1024]
+    .view(hidden_shape)                            # [B,S,8,128]
+    .transpose(1, 2)                               # [B,8,S,128]
 )
 ```
+
+**代码定位：** [modeling_qwen3.py:197-202][q-split-heads]；上面是源码主干，并补充了形状变化。
 
 把 Q 分支逐步写开：
 
@@ -1013,26 +1122,30 @@ Qwen3 在这里对 Q/K 做了每头 RMSNorm，V 没有对应的 `v_norm`。
 
 ### 9.3 对 Q 和 K 施加 RoPE
 
+**本节目的：** 说明第 7 节算出的 `cos/sin` 如何真正写入 Q/K 的位置关系。
+
 **先看白话：** 相同的词出现在不同位置，模型需要区分。RoPE 根据位置，把 Q/K 中成对的数字“转一个角度”；之后做匹配时，位置关系就会影响分数。它不改变 token 顺序，也不把文字真的旋转。
 
 ![RoPE 示意：位置决定旋转角度，旋转后的 K 才进入缓存](docs/learning/05-rope.svg)
 
 图 5：箭头只是某一对维度的几何示意，不是本次运行的真实向量。实际有多组频率，代码一次处理全部维度。对应 [modeling_qwen3.py:86-117][q-rotate]、[modeling_qwen3.py:204-210][q-rope-cache]。
 
-**代码定位：** [modeling_qwen3.py:86-117][q-rotate]，源码主干：
+**这段代码要解决什么问题？** 前一节得到的 Q/K 只含内容特征，尚未含位置信息。下面利用本轮位置对应的 `cos/sin` 旋转 Q 和 K；V 不旋转。
 
 ```python
 def rotate_half(x):
     x1 = x[..., : x.shape[-1] // 2]  # 前 64 维
     x2 = x[..., x.shape[-1] // 2 :]  # 后 64 维
-    return torch.cat((-x2, x1), dim=-1)
+    return torch.cat((-x2, x1), dim=-1)  # 将 (x1, x2) 变为 (-x2, x1)
 
 cos = cos.unsqueeze(1)  # [B,1,S,128]，广播到所有头
-sin = sin.unsqueeze(1)
+sin = sin.unsqueeze(1)  # [B,1,S,128]
 
-q_embed = q * cos + rotate_half(q) * sin
-k_embed = k * cos + rotate_half(k) * sin
+q_embed = q * cos + rotate_half(q) * sin  # 带位置信息的 Q
+k_embed = k * cos + rotate_half(k) * sin  # 带位置信息的 K，随后写入 Cache
 ```
+
+**代码定位：** [modeling_qwen3.py:86-117][q-rotate]；上面是 RoPE 应用主干，并补充了输入输出含义。
 
 对一对对应维度 `(a,b)`，旋转相当于：
 
@@ -1059,50 +1172,59 @@ V 不做 RoPE。缓存里的 K 已经经过 Q/K Norm 中的 K Norm 和 RoPE；�
 
 ### 9.4 KV Cache：先加入当前 token，再参与注意力
 
+**本节目的：** 说明每层新 K/V 如何追加到历史缓存，并为何本轮 token 可以读取自己。
+
 **先看白话：** Cache 存的是“已经送入各层并算好的历史 K/V”。每次 forward 先为本轮输入计算 K/V，再把它们追加到旧缓存；随后，本轮的 Q 读取“旧 K/V + 本轮新 K/V”，而不是只读取最新位置。
 
 ![KV Cache 时间线：18 个 prompt、1 个新 token、再 1 个新 token](docs/learning/06-kv-timeline.svg)
 
 图 6：每行是一次 forward。缓存长度指本轮输入处理完后的长度，右侧输出还没有被下一轮消费，所以尚未写入缓存。对应 [cache_utils.py:95-118][cache-update] 和 [generation/utils.py:2858-2927][gen-loop]。
 
-**代码定位：** [modeling_qwen3.py:207-210][q-cache-update]，Attention 源码主干：
+**这段代码要解决什么问题？** `key_states/value_states` 此时只包含本轮新输入的 K/V。调用 `update()` 后，它们会被替换为“历史 K/V + 本轮 K/V”，供后面的 Attention 一次性读取。
 
 ```python
 if past_key_values is not None:
     cache_kwargs = {
-        "sin": sin,
+        "sin": sin,                          # 某些 Cache 实现可能需要 RoPE 数据
         "cos": cos,
-        "cache_position": cache_position,
+        "cache_position": cache_position,    # 本轮 token 的位置
     }
     key_states, value_states = past_key_values.update(
-        key_states,
-        value_states,
-        self.layer_idx,
+        key_states,       # 本轮新 K：Prefill 为 [1,8,18,128]，Decode 为 [1,8,1,128]
+        value_states,     # 本轮新 V
+        self.layer_idx,   # 更新当前 Decoder 层自己的缓存
         cache_kwargs,
     )
+    # 返回完整 K/V：例如第一次 Decode 后均为 [1,8,19,128]。
 ```
+
+**代码定位：** [modeling_qwen3.py:207-210][q-cache-update]；上面是缓存更新主干，并补充了更新前后的区别。
 
 `self.layer_idx` 区分第 0 层到第 27 层。第 0 层的 K/V 不能供第 1 层直接复用，因为每层输入与投影权重都不同。
 
-**代码定位：** [cache_utils.py:794-832][cache-dispatch]，缓存容器内部主干：
+`past_key_values` 先依据 `layer_idx` 找到当前层容器，再把更新委托给该层：
 
 ```python
 keys, values = self.layers[layer_idx].update(
-    key_states, value_states, cache_kwargs
+    key_states, value_states, cache_kwargs  # 输入本轮新 K/V，返回完整 K/V
 )
 return keys, values
 ```
 
-**代码定位：** [cache_utils.py:95-118][cache-update]，本次使用的 `DynamicLayer.update()` 核心：
+**代码定位：** [cache_utils.py:794-832][cache-dispatch]；上面是按层分派缓存更新的主干。
+
+本例使用 `DynamicLayer`，其核心动作就是沿序列维追加：
 
 ```python
 if self.keys is None:
-    self.lazy_initialization(key_states)
+    self.lazy_initialization(key_states)  # 第一次更新时创建空的 K/V 张量
 
-self.keys = torch.cat([self.keys, key_states], dim=-2)
-self.values = torch.cat([self.values, value_states], dim=-2)
-return self.keys, self.values
+self.keys = torch.cat([self.keys, key_states], dim=-2)      # 旧 K + 本轮新 K
+self.values = torch.cat([self.values, value_states], dim=-2)  # 旧 V + 本轮新 V
+return self.keys, self.values  # 返回供本轮 Attention 读取的完整历史
 ```
+
+**代码定位：** [cache_utils.py:95-118][cache-update]；上面是本例 `DynamicLayer.update()` 的核心。
 
 `dim=-2` 是序列维，缓存形状为 `[B,Nk,T,D]`。
 
@@ -1126,6 +1248,8 @@ Prefill:
 
 ### 9.5 为什么只缓存 K/V，不缓存 Q
 
+**本节目的：** 从未来生成时真正需要的数据出发，解释缓存 K/V 而不缓存历史 Q 的原因。
+
 当前 token 的输出需要：
 
 ```text
@@ -1140,6 +1264,8 @@ Prefill:
 
 ### 9.6 GQA：16 个 Q 头共享 8 组 K/V
 
+**本节目的：** 解释 Q 头数和 KV 头数不一致时，如何减少持久 KV Cache 占用。
+
 **先看白话：** 16 个头各自发起查询，但不各自保存一套不同的 K/V。每两个 Q 头共用一组 K/V，因此历史缓存少存了一半的头。
 
 本模型：
@@ -1150,17 +1276,19 @@ Prefill:
 num_key_value_groups = 16 // 8  # 2
 ```
 
-**代码定位：** [modeling_qwen3.py:120-129][q-repeat-kv]，代入 `n_rep=2` 后的源码主干：
+**这段代码要解决什么问题？** Cache 中只存 8 个 K/V 头以节省内存，但 Q 有 16 个头。做矩阵乘法前，需要逻辑上让每组 K/V 头对应两个 Q 头；下面是 eager 实现中的展开方式。
 
 ```python
 batch, num_kv_heads, slen, head_dim = hidden_states.shape
 hidden_states = hidden_states[:, :, None, :, :].expand(
-    batch, num_kv_heads, 2, slen, head_dim
+    batch, num_kv_heads, 2, slen, head_dim  # 每个 KV 头逻辑上复制 2 份
 )
 hidden_states = hidden_states.reshape(
-    batch, num_kv_heads * 2, slen, head_dim
+    batch, num_kv_heads * 2, slen, head_dim  # [B,8,2,T,128] -> [B,16,T,128]
 )
 ```
+
+**代码定位：** [modeling_qwen3.py:120-129][q-repeat-kv]；上面是代入 `n_rep=2` 的源码主干。
 
 效果是：
 
@@ -1180,45 +1308,47 @@ Q head 14、15 使用 KV head 7
 
 ### 9.7 核心数学：`QK^T -> mask -> softmax -> V`
 
+**本节目的：** 按顺序展开 Attention 的打分、屏蔽、归一化和加权汇总四步。
+
 **先看白话：** 这串公式只有四步：给各位置打分、遮住不能看的位置、把分数转成权重、按权重汇总内容。`K^T` 中的上标 `T` 表示转置，即交换 K 的最后两个维度；它与形状 `[B,16,S,T]` 中表示上下文长度的 `T` 含义不同。
 
 举一个纯教学例子：假设三个可读位置的分数是 `2、1、0`，softmax 后权重大约是 `0.665、0.245、0.090`，总和为 1。若它们的 V 分别是 `[10,0]、[0,10]、[10,10]`，汇总结果约为 `[7.55,3.35]`。这不是直接挑一个位置，而是让不同位置贡献不同份额。实际模型的 V 有 128 维，并对多个头分别执行。
 
-**代码定位：** [modeling_qwen3.py:142-155][q-eager]，`eager_attention_forward()` 源码主干，补充形状注释：
+**这段代码要解决什么问题？** 前面已经有带位置的 Q，以及缓存合并后的 K/V。现在依次完成：让 K/V 头数对齐 Q、计算相关性分数、加入因果限制、把分数变成权重、按权重汇总 V。
 
 ```python
-key_states = repeat_kv(key, module.num_key_value_groups)
-value_states = repeat_kv(value, module.num_key_value_groups)
-# Q: [B,16,S,128]；K/V: [B,16,T,128]
+key_states = repeat_kv(key, module.num_key_value_groups)      # [B,8,T,128] -> [B,16,T,128]
+value_states = repeat_kv(value, module.num_key_value_groups)  # 让每个 Q 头都有对应 K/V
+# 此时 Q: [B,16,S,128]；K/V: [B,16,T,128]
 
 attn_weights = torch.matmul(
     query,
     key_states.transpose(2, 3),  # [B,16,128,T]
-) * scaling
-# scores: [B,16,S,T]；scaling = 128 ** -0.5
+) * scaling                         # 每个 query 对每个可见 key 的分数：[B,16,S,T]
 
 if attention_mask is not None:
-    causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-    attn_weights = attn_weights + causal_mask
+    causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]  # 取与当前 K 长度匹配的 mask
+    attn_weights = attn_weights + causal_mask  # 未来位置加极小值，softmax 后接近 0
 
 attn_weights = nn.functional.softmax(
     attn_weights,
-    dim=-1,                     # 对可见 key 位置归一化
+    dim=-1,                     # 对每个 query 的所有 key 位置归一化，得到权重
     dtype=torch.float32,
 ).to(query.dtype)
 
 attn_weights = nn.functional.dropout(
     attn_weights,
     p=dropout,
-    training=module.training,   # 本例 eval，且 dropout=0
+    training=module.training,   # 本例 eval，且 dropout=0，因此数值不变
 )
 
-attn_output = torch.matmul(attn_weights, value_states)
-# [B,16,S,T] @ [B,16,T,128] -> [B,16,S,128]
+attn_output = torch.matmul(attn_weights, value_states)  # 按权重汇总 V：[B,16,S,128]
 
 attn_output = attn_output.transpose(1, 2).contiguous()
-# [B,S,16,128]
+# 调整为 [B,S,16,128]，供下一节合并所有头
 ```
+
+**代码定位：** [modeling_qwen3.py:142-155][q-eager]；上面是 eager Attention 主干，并标出了每一步输入输出。
 
 数学公式：
 
@@ -1254,19 +1384,23 @@ attn output:   [1,1,16,128]
 
 ### 9.8 合并头并返回残差流
 
+**本节目的：** 说明多个 Attention 头的输出如何回到 Decoder 统一使用的 1024 维表示。
+
 回到 `Qwen3Attention.forward()`：
 
-**代码定位：** [modeling_qwen3.py:228-230][q-output-proj]，源码主干：
+**这段代码要解决什么问题？** Attention 此时仍按头保留数据，形状是 `[B,S,16,128]`。先把 16 个头拼回 2048 维，再经过输出投影映射回 Decoder 统一使用的 1024 维。
 
 ```python
 attn_output = attn_output.reshape(*input_shape, -1).contiguous()
-# [B,S,16,128] -> [B,S,2048]
+# [B,S,16,128] -> [B,S,2048]；`contiguous()` 保证后续线性层所需的连续布局
 
 attn_output = self.o_proj(attn_output)
-# [B,S,2048] -> [B,S,1024]
+# [B,S,2048] -> [B,S,1024]；可以与残差流相加
 
-return attn_output, attn_weights
+return attn_output, attn_weights  # 返回 Attention 输出与内部权重
 ```
+
+**代码定位：** [modeling_qwen3.py:228-230][q-output-proj]；上面是合并头与输出投影主干。
 
 输出投影混合不同头的信息，并恢复 1024 维，这样 Decoder 才能执行：
 
@@ -1280,22 +1414,24 @@ hidden_states = residual + attn_output  # 两者形状都是 [B,S,1024]
 
 ## 10. MLP：逐 token 的非线性特征变换
 
+**本节目的：** 说明 Attention 混合上下文后，MLP 如何独立加工每个 token 的特征向量。
+
 **先看白话：** Attention 已经把上下文信息带过来，MLP 再加工每个 token 自己的那行数字。它先把 1024 维展开成 3072 维，让一条分支调节另一条分支的各项贡献，再压回 1024 维。
 
 ![SwiGLU：两条分支逐元素相乘，再压回原维度](docs/learning/07-mlp.svg)
 
 图 7：`×` 是对应位置相乘，不是矩阵乘法；`gate_proj` 不是 MoE 专家路由。MLP 的输出随后加回原表示。对应 [modeling_qwen3.py:76-83][q-mlp]。
 
-在注意力与第一条残差之后：
-
-**代码定位：** [modeling_qwen3.py:273-277][q-mlp-residual]，源码主干：
+**这段代码要解决什么问题？** Attention 已混入上下文信息，但仍保持 `[B,S,1024]`。下面的 MLP 对每个位置分别进行非线性变换，再用残差连接保留 Attention 的结果：
 
 ```python
-residual = hidden_states
-hidden_states = self.post_attention_layernorm(hidden_states)
-hidden_states = self.mlp(hidden_states)
-hidden_states = residual + hidden_states
+residual = hidden_states                                   # 保存 Attention 后的 [B,S,1024]
+hidden_states = self.post_attention_layernorm(hidden_states)  # MLP 前归一化
+hidden_states = self.mlp(hidden_states)                   # MLP 输出仍为 [B,S,1024]
+hidden_states = residual + hidden_states                   # 加回 Attention 后的表示
 ```
+
+**代码定位：** [modeling_qwen3.py:273-277][q-mlp-residual]；上面是 MLP 外层残差路径。
 
 **代码定位：** [modeling_qwen3.py:76-79][q-mlp-init]；把配置值代入后的 `Qwen3MLP` 初始化：
 
@@ -1342,28 +1478,35 @@ MLP(x) = down_proj(SiLU(gate_proj(x)) * up_proj(x))
 
 ## 11. `lm_head`：从隐藏表示到整个词表的分数
 
+**本节目的：** 说明最后的隐藏表示如何变成每个候选 token 的 logits。
+
 **先看白话：** 前面处理的是模型内部的一行数字，还不是文字。`lm_head` 把这行数字变成一张候选打分表：词表里每个编号都有一个分数。下一步才从这张表里选出一个编号。
 
-**代码定位：** [modeling_qwen3.py:491-506][q-logits]，外层 `Qwen3ForCausalLM.forward()` 源码主干：
+**这段代码要解决什么问题？** 28 层网络输出的是每个位置的 1024 维隐藏表示；这里先决定保留哪些位置，再用 `lm_head` 把它们映射为词表中 151936 个候选 token 的分数。
 
 ```python
-hidden_states = outputs.last_hidden_state
+hidden_states = outputs.last_hidden_state  # [B,S,1024]
 
 slice_indices = (
-    slice(-logits_to_keep, None)
+    slice(-logits_to_keep, None)  # logits_to_keep=1 时，只保留最后一个位置
     if isinstance(logits_to_keep, int)
     else logits_to_keep
 )
 logits = self.lm_head(hidden_states[:, slice_indices, :])
+# Prefill 时：[1,18,1024] -> 取最后位置 [1,1,1024] -> [1,1,151936]
 
 return CausalLMOutputWithPast(
-    loss=None,  # 本例没有 labels
-    logits=logits,
-    past_key_values=outputs.past_key_values,
+    loss=None,                                  # 本例只生成，没有训练标签
+    logits=logits,                              # 下一步用于选择下一个 token
+    past_key_values=outputs.past_key_values,    # 同时把本轮更新后的缓存交还 generate()
 )
 ```
 
+**代码定位：** [modeling_qwen3.py:491-506][q-logits]；上面是词表投影与返回结果的主干。
+
 ### 11.1 为什么 Prefill 只输出一个位置的 logits
+
+**本节目的：** 解释 `logits_to_keep=1` 如何节省无用的词表投影，而不跳过 prompt 的 Decoder 计算。
 
 `generate()` 检查模型支持 `logits_to_keep` 后，为本例设置 `logits_to_keep=1`。
 
@@ -1391,6 +1534,8 @@ slice(-0, None) == slice(0, None)  # 保留所有位置
 
 ### 11.2 为什么最后一个输入位置能预测第一个答案 token
 
+**本节目的：** 连接因果语言模型的训练目标与本例“最后 prompt 位置预测第一个新 token”的行为。
+
 因果语言模型训练时，让位置 `t` 的输出预测 `t+1` 的 token。
 
 所以本例：
@@ -1404,6 +1549,8 @@ slice(-0, None) == slice(0, None)  # 保留所有位置
 它不是在“复述输入最后一个双换行”，而是在预测它后面的 token。
 
 ### 11.3 权重共享与 logits 的含义
+
+**本节目的：** 区分 Embedding 查表和 `lm_head` 投影，并澄清 logits 不是概率或 token ID。
 
 **代码定位：** [modeling_qwen3.py:429-441][q-lm-head] 与 [config.json:24][config-tied]；以下将输出头配置代入并说明权重共享：
 
@@ -1427,31 +1574,36 @@ logits 是未归一化的分数，不是概率，也不是 token ID。其最后�
 
 ## 12. 回到生成循环：选 token、更新状态、检查停止
 
+**本节目的：** 把模型输出的 logits 接回控制循环，完成 token 选择、状态推进与停止判断。
+
 ### 12.1 每轮生成的源码骨架
+
+**本节目的：** 从源码时序看清一轮生成中输入准备、forward、选 token 和停止检查的先后关系。
 
 **先看白话：** 每一轮先处理本轮输入，再从最后一个位置得到候选分数；然后选出一个 token，追加到完整序列，最后检查是否停止。若继续，刚选出的 token 会在下一轮成为模型输入。
 
-**代码定位：** [generation/utils.py:2831-2960][gen-sample]；以下是 `_sample()` 与本例有关的主干：
+**这段代码要解决什么问题？** 它把单次 `forward()` 重复执行，直到所有序列停止。阅读时可按四段看：准备本轮输入和 forward、更新下一轮状态、选择并追加 token、检查停止。
 
 ```python
 unfinished_sequences = torch.ones(
-    batch_size, dtype=torch.long, device=input_ids.device
+    batch_size, dtype=torch.long, device=input_ids.device  # 1 表示该序列尚未结束
 )
 model_kwargs = self._get_initial_cache_position(
-    cur_len, input_ids.device, model_kwargs
+    cur_len, input_ids.device, model_kwargs  # 首轮 cache_position = [0, ..., 17]
 )
-is_prefill = True
+is_prefill = True  # 首轮处理整段 prompt；后续轮处理 1 个新 token
 
 while self._has_unfinished_sequences(
     this_peer_finished, synced_gpus, device=input_ids.device
 ):
     model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
+    # 完整序列与 Cache -> 本轮真正送给 forward 的输入
 
     if is_prefill:
-        outputs = self(**model_inputs, return_dict=True)
+        outputs = self(**model_inputs, return_dict=True)  # 第一轮：18 个 prompt token
         is_prefill = False
     else:
-        outputs = model_forward(**model_inputs, return_dict=True)
+        outputs = model_forward(**model_inputs, return_dict=True)  # 后续：通常 1 个 token
 
     # forward 已经更新了本轮的 KV；这里准备下一轮要使用的状态。
     model_kwargs = self._update_model_kwargs_for_generation(
@@ -1462,15 +1614,16 @@ while self._has_unfinished_sequences(
         copy=True,
         dtype=torch.float32,
         device=input_ids.device,
-    )  # [B,V]
+    )  # 取最后位置的词表分数：[B,V]
 
     next_token_scores = logits_processor(input_ids, next_token_logits)
+    # 本例没有额外处理器，因此分数实质上不变
 
     if do_sample:
-        probs = nn.functional.softmax(next_token_scores, dim=-1)
-        next_tokens = torch.multinomial(probs, num_samples=1).squeeze(1)
+        probs = nn.functional.softmax(next_token_scores, dim=-1)  # 分数转概率
+        next_tokens = torch.multinomial(probs, num_samples=1).squeeze(1)  # 按概率随机抽取
     else:
-        next_tokens = torch.argmax(next_token_scores, dim=-1)  # [B]
+        next_tokens = torch.argmax(next_token_scores, dim=-1)  # 本例：选择最高分 ID，[B]
 
     if has_eos_stopping_criteria:
         next_tokens = (
@@ -1479,8 +1632,9 @@ while self._has_unfinished_sequences(
         )
 
     input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
+    # 把刚选出的 ID 追加到完整序列；它会在下一轮成为模型输入
     unfinished_sequences = (
-        unfinished_sequences & ~stopping_criteria(input_ids, scores)
+        unfinished_sequences & ~stopping_criteria(input_ids, scores)  # EOS 或长度上限则标记结束
     )
     this_peer_finished = unfinished_sequences.max() == 0
     cur_len += 1
@@ -1489,9 +1643,13 @@ while self._has_unfinished_sequences(
 return input_ids  # 本例 return_dict_in_generate=False
 ```
 
+**代码定位：** [generation/utils.py:2831-2960][gen-sample]；上面是 `_sample()` 的本例主干，并补充了循环时序注释。
+
 省略了流式输出、可选结果保存和多卡同步分支。本例没有启用编译缓存，`model_forward` 是普通模块调用，不要把这个变量名理解为一定执行了编译图。
 
 ### 12.2 贪心为何不需要词表 softmax
+
+**本节目的：** 解释为何贪心只需 `argmax`，并与 Attention 内部的 softmax 区分开。
 
 本例执行：
 
@@ -1514,22 +1672,27 @@ next_tokens = torch.argmax(next_token_scores, dim=-1)
 
 ### 12.3 下一轮的 mask 和位置怎样增长
 
-**代码定位：** [generation/utils.py:961-994][gen-update]，`_update_model_kwargs_for_generation()` 主干：
+**本节目的：** 说明每轮生成后缓存、`attention_mask` 和 `cache_position` 如何为下一轮推进一格。
+
+**这段代码要解决什么问题？** `forward()` 已经处理完本轮输入并返回更新后的缓存。此处不产生 token，而是把下一轮会用到的缓存、mask 和位置先推进一格。
 
 ```python
-model_kwargs["past_key_values"] = outputs.past_key_values
+model_kwargs["past_key_values"] = outputs.past_key_values  # 接住本轮更新后的各层 K/V
 
-attention_mask = model_kwargs["attention_mask"]
+attention_mask = model_kwargs["attention_mask"]            # 例如 Prefill 后仍是 [1,18]
 model_kwargs["attention_mask"] = torch.cat(
     [
         attention_mask,
-        attention_mask.new_ones((attention_mask.shape[0], 1)),
+        attention_mask.new_ones((attention_mask.shape[0], 1)),  # 为即将追加的位置标为有效
     ],
     dim=-1,
-)
+)  # Prefill 后：[1,18] -> [1,19]
 
 model_kwargs["cache_position"] = model_kwargs["cache_position"][-1:] + 1
+# Prefill 的 [0,...,17] -> 下一轮的 [18]
 ```
+
+**代码定位：** [generation/utils.py:961-994][gen-update]；上面是下一轮状态更新主干。
 
 Prefill 后：
 
@@ -1544,6 +1707,8 @@ Prefill 后：
 历史缓存对象通常是同一个可变对象；传递 `outputs.past_key_values` 并不是把整个缓存搬回 CPU，再复制进下一轮 GPU。
 
 ### 12.4 停止不是由 `forward()` 决定的
+
+**本节目的：** 说明模型只返回分数，EOS 和长度上限等停止决定由生成循环统一处理。
 
 本例主要有两种停止条件：
 
@@ -1563,6 +1728,8 @@ EOS 检查的是新序列的最后一个 token。Prompt 中位置 9 的 `<|im_en
 批量生成时，已结束的序列可能继续被填入 pad token，直到其他序列也结束；本例 `B=1` 没有这个等待场景。
 
 ## 13. 用本次真实输出走完时间线
+
+**本节目的：** 用本机真实生成的 16 个 token 把 Prefill、Decode、缓存长度和停止时刻对应起来。
 
 入口在本机 MPS/FP16 下实际输出：
 
@@ -1591,6 +1758,8 @@ EOS 检查的是新序列的最后一个 token。Prompt 中位置 9 的 `<|im_en
 
 ### 13.1 第一个 token 是 Prefill 的产物
 
+**本节目的：** 说明为什么生成 16 个 token 只需要 1 次 Prefill 加 15 次 Decode。
+
 本例生成 16 个新 token，一共需要：
 
 ```text
@@ -1600,6 +1769,8 @@ EOS 检查的是新序列的最后一个 token。Prompt 中位置 9 的 `<|im_en
 原因是：Prefill 处理 prompt 的同时，最后一个 prompt 位置的 logits 已经选出了第 1 个新 token。剩下的 15 个新 token，才分别由 15 次 Decode 产生。不要误算成“先 Prefill，再 Decode 16 次”。
 
 ### 13.2 为什么最终输出长度 34，缓存长度却是 33
+
+**本节目的：** 解释最后一个刚选出的 token 为什么尚未进入下一次 forward，也就还没有 K/V。
 
 最后一次 forward：
 
@@ -1618,17 +1789,20 @@ forward 后缓存长度：33
 
 ## 14. 解码与返回：ID 重新变成文字
 
-**代码定位：** [debug_official.py:81-85][entry-decode]，入口代码：
+**本节目的：** 说明如何从包含 prompt 的完整 ID 序列中取出新增 token，并解码为用户看到的文本。
+
+**这段代码要解决什么问题？** `generate()` 返回的是“prompt + 新生成 token”的完整 ID 序列；用户只需要新增部分。因此先按 prompt 长度切片，再把这些 ID 转回字符串。
 
 ```python
-new_ids = output_ids[0, prompt_length:]
-# output_ids: [1,34]
-# 取 batch 0 并去掉前 18 个 prompt token，得到 [16]
+new_ids = output_ids[0, prompt_length:]  # 取第 0 条请求，并去掉前 18 个 prompt ID
+# output_ids: [1,34]；new_ids: [16]
 
-answer = tokenizer.decode(new_ids, skip_special_tokens=True)
-print("新生成的 token ID:", new_ids.tolist())
-print("回答:", answer)
+answer = tokenizer.decode(new_ids, skip_special_tokens=True)  # ID 序列 -> 用户可见字符串
+print("新生成的 token ID:", new_ids.tolist())                # 仅用于观察真实 ID
+print("回答:", answer)                                       # 打印最终文本
 ```
+
+**代码定位：** [debug_official.py:81-85][entry-decode]；上面是输出截取和解码主干。
 
 完整逻辑：
 
@@ -1652,6 +1826,8 @@ tokenizer.decode(...)
 在常驻推理服务中，模型通常继续驻留，单请求中间张量与缓存按生命周期释放或回收。设备分配器可能保留已申请内存以供复用，所以请求结束后“仍有设备内存占用”并不自动意味着泄漏。
 
 ## 15. 关闭 KV Cache 后，究竟多算了什么
+
+**本节目的：** 对比开关缓存时每轮输入长度和重复计算内容，理解 Cache 节省的究竟是什么。
 
 这一节只比较“每次送入 Decoder 的 token 数量”和“哪些历史表示被重复计算”，不把 token 数量直接当成总 FLOPs。
 
@@ -1696,6 +1872,8 @@ forward 16 输入长度：1
 在相同数值计算条件下，两条路径意图实现同一个自回归条件分布。实际浮点归约和算子形状可能不同，因此不要无条件要求所有平台的 logits 逐位相等。
 
 ## 16. 完整实验：不调用 `generate()`，自己管理生成循环
+
+**本节目的：** 用可运行代码手动复现本例贪心循环，验证输入裁剪、缓存、位置和停止逻辑。
 
 前面把一个请求拆开解释，现在重新拼成一个可运行程序。代码中的 `manual_generate()` 负责控制循环，但每一轮的神经网络计算仍然调用官方 `model(...)`。
 
@@ -1873,7 +2051,11 @@ print("回答:", tokenizer.decode(
 
 ## 17. 从 AI Infra 视角理解这条路径
 
+**本节目的：** 把本例的单请求实现映射到推理服务中的内存管理、性能瓶颈和调度概念。
+
 ### 17.1 参数、激活、KV Cache 是三类不同内存
+
+**本节目的：** 区分模型共享参数、单次 forward 临时激活和单请求 KV Cache 的生命周期与占用。
 
 先区分三个对象：参数属于模型、激活属于当前计算、KV Cache 属于当前请求。它们都可能出现在设备内存中，但生命周期和复用范围不同。
 
@@ -1910,6 +2092,8 @@ CPU FP32 缓存按元素大小计算会翻倍。真实服务中的并发、不�
 
 ### 17.2 Prefill 和 Decode 为什么表现不同
 
+**本节目的：** 从计算形状解释 Prefill 和 Decode 常见的吞吐与延迟差异。
+
 这里的“表现不同”指计算形状和常见性能倾向，不是说两者执行了两套不同的模型。
 
 Prefill 一次处理多个 token：
@@ -1941,6 +2125,8 @@ Prefill: O(B * Nq * P^2 * D)
 
 ### 17.3 为什么 eager 很适合学习，却不是性能最优实现
 
+**本节目的：** 说明 eager 代码为何易于观察数学过程，以及融合 Attention 内核优化了什么。
+
 源码明确创建：
 
 **代码定位：** [modeling_qwen3.py:145-152][q-attention-math]；以下使用简短变量名概括，省略 dtype 等细节：
@@ -1959,6 +2145,8 @@ FlashAttention 一类实现以分块与融合方式计算同样的注意力语�
 
 ### 17.4 Dynamic Cache、Static Cache 与 Paged KV
 
+**本节目的：** 对比三种 KV 存储方式如何分配、增长和定位同样的历史 K/V。
+
 三者保存的仍然是每层的 K/V，主要区别在于内存如何分配、增长和定位：
 
 | 方式 | 基本思路 | 需要关注的问题 |
@@ -1972,6 +2160,8 @@ FlashAttention 一类实现以分块与融合方式计算同样的注意力语�
 分页主要改变缓存存储和访问方式，不改变“当前 Q 读取可见历史 K/V”这一基本数学关系。
 
 ### 17.5 从 `while` 循环到生产推理引擎
+
+**本节目的：** 将本例脚本中的对象对应到生产系统的调度、执行和缓存管理组件。
 
 | 当前脚本中的部分 | 在生产系统中常见的对应部分 |
 |---|---|
@@ -1993,6 +2183,8 @@ Prefix Cache 是跨请求复用兼容前缀的 K/V。本例的 KV Cache 只是�
 Tensor Parallel、Pipeline Parallel、CUDA Graph、Chunked Prefill、投机解码都属于进一步的执行或调度机制，本次脚本没有启用。理解它们时，可以反过来问：它们在上表中改变了哪一部分，哪些模型数学不变？
 
 ### 17.6 延迟指标怎样对应代码
+
+**本节目的：** 说明首 token 延迟、token 间延迟和端到端延迟分别覆盖哪段代码路径。
 
 这些指标描述的是一次请求中不同时间段的耗时；本脚本没有队列和流式输出，所以只能直接测到端到端生成耗时。
 
@@ -2039,6 +2231,8 @@ elapsed = time.perf_counter() - t0
 
 ## 18. 张量速查表
 
+**本节目的：** 将 Prefill 和第一次 Decode 的关键张量形状并排汇总，便于回查。
+
 以下比较 Prefill 与第一次 Decode。表中 `T` 指本轮 K/V 已加入后的可见长度；“本轮新增 K/V”只指本轮输入刚算出来的那一段。
 
 | 张量或步骤 | Prefill | 第一次 Decode |
@@ -2066,6 +2260,8 @@ elapsed = time.perf_counter() - t0
 | 追加后完整 ID 序列 | `[1,19]` | `[1,20]` |
 
 ## 19. 源码与断点索引
+
+**本节目的：** 提供可点击的源码入口和最小断点集合，方便把文档解释与真实运行对应起来。
 
 这些链接对应当前机器的实际文件和 Transformers 4.56.2。升级依赖后行号可能变化，优先按函数名定位。入口注释提到的 `DEBUG_GUIDE.md` 当前工作目录未发现，本文直接给出完整索引，不依赖它。
 
@@ -2102,6 +2298,8 @@ elapsed = time.perf_counter() - t0
 
 ### 19.1 第一遍调试，只设这些断点
 
+**本节目的：** 用最少的断点观察主控制流和关键形状，避免一开始陷入通用框架代码。
+
 1. 入口的 `model.generate(...)`：确认 prompt 长度为 18。
 2. `Qwen3Model.forward()` 的 `embed_tokens` 后：观察 `[1,18,1024]`。
 3. `Qwen3Attention.forward()`：条件设为 `self.layer_idx == 0`，避免 28 层反复停下。
@@ -2115,6 +2313,8 @@ elapsed = time.perf_counter() - t0
 不要一开始逐语句跟进所有加载和通用包装代码；先通过上述断点建立张量与控制流的对应关系，再按兴趣深入加载器和底层算子。
 
 ## 20. 自测：能回答这些问题，就串起了主干
+
+**本节目的：** 用问题检查是否已经将输入处理、模型计算、缓存与生成控制串成完整流程。
 
 **1. 为什么一句 7 个字符的题目，输入有 18 个 token？**  
 因为加入了角色与边界标记、assistant 前缀和 thinking 模板；字符与 token 也不是一一对应。
