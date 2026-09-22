@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="790" viewBox="0 0 920 790" role="img" aria-labelledby="title desc">
+<title id="title">ID、位置、长度和 shape 是四件不同的事</title>
+<desc id="desc">以第一次Decode为例。完整序列有19个位置，索引从0到18。最后一个位置18中的token ID为16，ID16解码为字符1。本次input_ids张量只有一条序列和一个待计算ID，所以shape为1乘1。历史缓存覆盖位置0到17，长度18。</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M1 1L7 4L1 7" fill="none" stroke="#4b5b6d" stroke-width="1.4"/></marker></defs>
+<rect width="920" height="790" fill="#f8fafc"/>
+<g font-family="PingFang SC, Microsoft YaHei, sans-serif" fill="#203047">
+<text x="42" y="52" font-size="29" font-weight="700">同一个“1”，要同时看四种数字</text>
+<text x="42" y="83" font-size="18" fill="#607084">第一次 Decode 调用前 · 数值来自本文实例 · 索引从 0 开始</text>
+<text x="42" y="130" font-size="20" font-weight="700">完整逻辑序列：19 个 token</text>
+<g font-size="14" text-anchor="middle">
+<rect x="42" y="150" width="630" height="70" rx="10" fill="#eaf2fd" stroke="#91b7df"/>
+<text x="64" y="177">0</text><text x="95" y="177">1</text><text x="126" y="177">2</text><text x="157" y="177">3</text><text x="188" y="177">4</text><text x="219" y="177">5</text><text x="250" y="177">6</text><text x="281" y="177">7</text><text x="312" y="177">8</text><text x="343" y="177">9</text><text x="374" y="177">10</text><text x="405" y="177">11</text><text x="436" y="177">12</text><text x="467" y="177">13</text><text x="498" y="177">14</text><text x="529" y="177">15</text><text x="560" y="177">16</text><text x="591" y="177">17</text>
+<text x="64" y="204">·</text><text x="95" y="204">·</text><text x="126" y="204">·</text><text x="157" y="204">·</text><text x="188" y="204">·</text><text x="219" y="204">·</text><text x="250" y="204">·</text><text x="281" y="204">·</text><text x="312" y="204">·</text><text x="343" y="204">·</text><text x="374" y="204">·</text><text x="405" y="204">·</text><text x="436" y="204">·</text><text x="467" y="204">·</text><text x="498" y="204">·</text><text x="529" y="204">·</text><text x="560" y="204">·</text><text x="591" y="204">·</text>
+</g>
+<rect x="690" y="150" width="178" height="70" rx="10" fill="#fff2df" stroke="#d7a34f"/>
+<text x="779" y="177" text-anchor="middle" font-size="17" font-weight="700">位置索引 18</text>
+<text x="779" y="204" text-anchor="middle" font-size="17">token ID = 16</text>
+<path d="M672 185H688" stroke="#4b5b6d" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="42" y="248" font-size="17" fill="#607084">位置 0～17 已在缓存里；位置 18 是刚选出的回答开头“1”。</text>
+
+<rect x="42" y="292" width="250" height="130" rx="13" fill="#eaf2fd" stroke="#91b7df"/>
+<text x="62" y="326" font-size="22" font-weight="700">长度 = 19</text>
+<text x="62" y="357" font-size="17">回答“一共有多少个 token？”</text>
+<text x="62" y="390" font-size="17">完整序列含位置 0～18。</text>
+<rect x="334" y="292" width="250" height="130" rx="13" fill="#eef8f4" stroke="#91c9ba"/>
+<text x="354" y="326" font-size="22" font-weight="700">位置 = 18</text>
+<text x="354" y="357" font-size="17">回答“这个 token 放在哪里？”</text>
+<text x="354" y="390" font-size="17">第 19 个位置的索引是 18。</text>
+<rect x="626" y="292" width="242" height="130" rx="13" fill="#fff2df" stroke="#d7a34f"/>
+<text x="646" y="326" font-size="22" font-weight="700">ID = 16</text>
+<text x="646" y="357" font-size="17">回答“它是词表中的哪一项？”</text>
+<text x="646" y="390" font-size="17">本例 ID 16 解码为“1”。</text>
+
+<text x="42" y="474" font-size="22" font-weight="700">为什么本次 input_ids.shape = (1,1)？</text>
+<rect x="42" y="500" width="386" height="122" rx="13" fill="#fff" stroke="#91b7df" stroke-width="2"/>
+<text x="62" y="537" font-size="20" font-weight="700">input_ids = [[16]]</text>
+<text x="62" y="571" font-size="17">外层一对方括号：1 条请求（B=1）</text>
+<text x="62" y="599" font-size="17">内层一个元素：本轮只计算 1 个 ID（S=1）</text>
+<path d="M430 560H485" stroke="#4b5b6d" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="490" y="500" width="378" height="122" rx="13" fill="#eef8f4" stroke="#91c9ba" stroke-width="2"/>
+<text x="510" y="537" font-size="20" font-weight="700">shape = (1,1)</text>
+<text x="510" y="571" font-size="17">shape 只描述各轴长度，不描述 ID 是多少。</text>
+<text x="510" y="599" font-size="17">它不表示“ID 1”，也不表示“位置 1”。</text>
+
+<rect x="42" y="662" width="826" height="78" rx="12" fill="#edf8f4" stroke="#198477"/>
+<text x="62" y="694" font-size="20" font-weight="700" fill="#176b61">一句话记忆</text>
+<text x="62" y="723" font-size="18">长度数有几个；位置说放哪儿；ID 说它是谁；shape 说数组每个方向有多长。</text>
+<text x="42" y="772" font-size="16" fill="#607084">同一 token 的位置与 ID 可以不同；不同位置也可以出现相同 ID。</text>
+</g>
+</svg>

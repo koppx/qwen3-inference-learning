@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="1430" viewBox="0 0 1120 1430" role="img" aria-labelledby="title desc">
+<title id="title">进入模型后到底做什么：一次 forward 的完整链路</title>
+<desc id="desc">教学示意。generate准备输入后进入Qwen3ForCausalLM.forward，内部调用Qwen3Model。Qwen3Model依次执行Embedding、准备mask与RoPE数据、28层Decoder和最终Norm。返回外层后lm_head产生logits。forward返回generate后才由argmax选出token。若未结束，新token作为下一轮输入重新执行同一网络。</desc>
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M1 1 L8 5 L1 9" fill="none" stroke="#475569" stroke-width="1.7"/></marker>
+<marker id="teal-arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M1 1 L8 5 L1 9" fill="none" stroke="#0f766e" stroke-width="1.7"/></marker>
+</defs>
+<rect width="1120" height="1430" fill="#f8fafc"/>
+<g font-family="PingFang SC, Microsoft YaHei, sans-serif" fill="#172b43">
+<text x="40" y="52" font-size="31" font-weight="700">进入模型后，到底做了什么？</text>
+<text x="40" y="86" font-size="19" fill="#526578">一次生成迭代 · 教学示意 · 从上往下读，外框表示函数调用范围</text>
+
+<rect x="40" y="114" width="1040" height="86" rx="14" fill="#eaf2ff" stroke="#93b4e1"/>
+<text x="64" y="147" font-size="23" font-weight="700">模型外：generate() 准备本轮输入</text>
+<text x="64" y="179" font-size="19">Prefill：18 个 prompt ID ｜ 第一次 Decode：[[16]]（文字是“1”）＋历史 K/V</text>
+<path d="M560 201 V229" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+<rect x="40" y="232" width="1040" height="837" rx="18" fill="#f1f6fd" stroke="#376da0" stroke-width="2"/>
+<text x="64" y="268" font-size="24" font-weight="700">进入外层 Qwen3ForCausalLM.forward()</text>
+<text x="64" y="296" font-size="18" fill="#526578">入口 model(...) 调到这里：先调用内部主体，等它返回，再执行输出头。</text>
+
+<rect x="64" y="320" width="992" height="572" rx="16" fill="#eef9f5" stroke="#148678" stroke-width="2"/>
+<text x="88" y="352" font-size="23" font-weight="700" fill="#11675e">进入 self.model(...) → Qwen3Model.forward()</text>
+
+<rect x="88" y="375" width="658" height="86" rx="12" fill="#ffffff" stroke="#78b7a7"/>
+<text x="108" y="406" font-size="23" font-weight="700">① Embedding：编号 → 学到的特征向量</text>
+<text x="108" y="438" font-size="19">Prefill 的 shape：[1,18] → [1,18,1024]　（§7.2）</text>
+<path d="M417 462 V486" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+<rect x="88" y="490" width="658" height="88" rx="12" fill="#ffffff" stroke="#78b7a7"/>
+<text x="108" y="522" font-size="23" font-weight="700">② 准备辅助输入：mask 和 RoPE 数据</text>
+<text x="108" y="552" font-size="19">可读位置规则 ＋ cos/sin；向量仍保留　（§7.3～7.4）</text>
+<path d="M417 579 V604" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+<rect x="88" y="608" width="658" height="151" rx="12" fill="#ffffff" stroke="#148678" stroke-width="2"/>
+<text x="108" y="639" font-size="23" font-weight="700">③ 依次执行 28 层 Decoder　（§8～10）</text>
+<text x="108" y="673" font-size="19">每层：Norm → Attention → 残差相加</text>
+<text x="108" y="703" font-size="19">　　　Norm → MLP → 残差相加</text>
+<text x="108" y="736" font-size="19" fill="#11675e">层 0 → 层 1 → … → 层 27；传递的是向量，不是文字</text>
+<path d="M417 760 V785" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+<rect x="88" y="789" width="658" height="79" rx="12" fill="#ffffff" stroke="#78b7a7"/>
+<text x="108" y="820" font-size="23" font-weight="700">④ 最终 Norm → 返回隐藏表示和缓存</text>
+<text x="108" y="850" font-size="19">Prefill：last_hidden_state 的 shape = [1,18,1024]</text>
+
+<rect x="776" y="375" width="256" height="181" rx="12" fill="#dff0e9"/>
+<text x="793" y="408" font-size="21" font-weight="700" fill="#11675e">“进入主体”不是</text>
+<text x="793" y="438" font-size="21" font-weight="700" fill="#11675e">“先跑 Decoder 层”</text>
+<text x="793" y="475" font-size="18">绿色框包含 ①～④。</text>
+<text x="793" y="503" font-size="18">进框后，先查 Embedding，</text>
+<text x="793" y="531" font-size="18">再执行 28 层。</text>
+
+<rect x="776" y="605" width="256" height="162" rx="12" fill="#ffffff" stroke="#148678" stroke-dasharray="6 4"/>
+<text x="793" y="637" font-size="21" font-weight="700">每层各自的 KV Cache</text>
+<text x="793" y="671" font-size="18">先加入本轮新 K/V，</text>
+<text x="793" y="699" font-size="18">再用 Q 读取历史＋当前</text>
+<text x="793" y="727" font-size="18">可见位置；不是下一答案。</text>
+<path d="M776 747 H750" fill="none" stroke="#148678" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#teal-arrow)"/>
+<text x="792" y="823" font-size="18" fill="#11675e">内框返回时：</text>
+<text x="792" y="852" font-size="20" font-weight="700" fill="#11675e">还没有选出 token</text>
+
+<path d="M417 870 V930" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="439" y="918" font-size="18" fill="#526578">内部返回 → 继续执行外层</text>
+<rect x="88" y="934" width="944" height="107" rx="12" fill="#ffffff" stroke="#93b4e1"/>
+<text x="108" y="966" font-size="23" font-weight="700">⑤ lm_head：最后位置的向量 → 词表候选分数　（§11）</text>
+<text x="108" y="998" font-size="19">Prefill：取位置 17 的一行 → logits 的 shape = [1,1,151936]</text>
+<text x="108" y="1025" font-size="18" fill="#526578">外层 forward() 返回 logits ＋ 已更新的缓存；分数不是答案文字。</text>
+
+<path d="M560 1070 V1104" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="40" y="1108" width="1040" height="139" rx="14" fill="#fff5e6" stroke="#d99a41"/>
+<text x="64" y="1142" font-size="24" font-weight="700" fill="#925b13">回到模型外：generate() 才选 token　（§12）</text>
+<text x="64" y="1175" font-size="19">准备下一轮状态 → 本例 argmax 选 ID → 追加到完整序列 → 检查是否结束</text>
+<text x="64" y="1206" font-size="19">本次 Prefill 后选 ID 16，文字是“1”，追加到位置 18；这是“1加1等于2”的开头。</text>
+<text x="64" y="1232" font-size="18" fill="#925b13">这时缓存仍只覆盖位置 0～17；刚选出的“1”尚未作为输入计算 K/V。</text>
+
+<path d="M560 1248 V1272" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="40" y="1276" width="1040" height="76" rx="12" fill="#eaf2ff" stroke="#93b4e1"/>
+<text x="64" y="1307" font-size="21" font-weight="700">未结束：把新 ID 作为下一轮输入，从顶部重走同一网络</text>
+<text x="64" y="1335" font-size="19">第一次 Decode 处理“1”，再预测“加”。结束后才用 tokenizer.decode() 还原文字。</text>
+<text x="40" y="1385" font-size="18" fill="#526578">实线：调用与执行顺序　虚线：每层缓存参与 Attention　数值：learning.md 的单请求示例</text>
+<text x="40" y="1411" font-size="17" fill="#526578">关键区别：Decoder 是网络层；Decode 是生成阶段。两种阶段都执行 Embedding 和全部 Decoder 层。</text>
+</g>
+</svg>
