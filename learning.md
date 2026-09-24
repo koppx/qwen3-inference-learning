@@ -814,7 +814,7 @@ position_ids = position_ids[:, -current_input_length:]
 
 ### 7.0 一张图看清：进入谁、做什么、从哪里返回
 
-![一次 forward 的调用边界与执行链路：Embedding 在 Qwen3Model 内部，选 token 在 forward 返回之后](docs/learning/08-model-forward-flow.png)
+<img src="docs/learning/08-model-forward-flow.png" alt="一次 forward 的调用边界与执行链路：Embedding 在 Qwen3Model 内部，选 token 在 forward 返回之后" style="zoom: 50%;" />
 
 图 7-A：一次生成迭代的教学示意。外框表示调用范围，向下箭头表示执行顺序；绿色内框属于 `Qwen3Model`，它包含 Embedding 和 28 层 Decoder，而不是仅指 28 层。图中以文档记录的 Prefill 为例；本例后续 Decode 仍走同一套网络。源码对应 [内部主体][q-layers]、[外层输出头][q-logits] 和 [生成循环][gen-loop]。可缩放的图源位于 `docs/learning/08-model-forward-flow.svg`。
 
